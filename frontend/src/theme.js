@@ -3,9 +3,9 @@ import { createTheme } from "@mui/material/styles";
 const theme = createTheme({
   palette: {
     primary: {
-      main: "#0f766e",
-      light: "#5eead4",
-      dark: "#115e59"
+      main: "#0b84d6",
+      light: "#6bbff2",
+      dark: "#0a5aa3"
     },
     secondary: {
       main: "#f97316"
@@ -29,7 +29,7 @@ const theme = createTheme({
   },
   typography: {
     fontFamily:
-      '"Bahnschrift", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", sans-serif',
+      '"Google Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif',
     h2: {
       fontWeight: 800,
       letterSpacing: "-0.03em"

@@ -199,7 +199,7 @@ const TenantAccess = () => {
                 fontWeight: "bold",
                 borderRadius: 3,
                 background:
-                  "linear-gradient(90deg,#0f766e,#22c55e)"
+                  "linear-gradient(90deg,#0b84d6,#4cc3ff)"
               }}
             >
               {isLoading ? "Connecting..." : "Connect Tenant"}

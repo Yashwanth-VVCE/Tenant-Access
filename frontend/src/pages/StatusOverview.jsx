@@ -354,6 +354,31 @@ const StatusOverview = () => {
     }
   };
 
+  const downloadExcelReport = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/export-reports-excel`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "Failed to export Excel.");
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const fileName = reports[0]?.iflowName
+        ? `${reports[0].iflowName}.xlsx`
+        : "Monitoring_Overview.xlsx";
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      console.error("excel export failed", error);
+      setFeedback("Failed to export Excel.");
+    }
+  };
+
   return (
     <Box sx={{ minHeight: "100vh", pb: 8 }}>
       <TopBar />
@@ -572,7 +597,7 @@ const StatusOverview = () => {
                       width: "62%",
                       height: 3,
                       borderRadius: 999,
-                      background: "linear-gradient(90deg, #0f766e 0%, #22c55e 100%)"
+                      background: "linear-gradient(90deg, #0b84d6 0%, #4cc3ff 100%)"
                     }
                   }}
                 >
@@ -587,6 +612,15 @@ const StatusOverview = () => {
                     sx={{ borderRadius: 2, alignSelf: "flex-start" }}
                   >
                     {reportsLoading ? "Loading..." : "Refresh table"}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    startIcon={<DownloadRoundedIcon />}
+                    onClick={downloadExcelReport}
+                    disabled={!hasTriggeredFetch || reportsLoading || reports.length === 0}
+                    sx={{ borderRadius: 2, alignSelf: "flex-start" }}
+                  >
+                    Convert to Excel
                   </Button>
                   <Button
                     variant="contained"
@@ -686,6 +720,16 @@ const StatusOverview = () => {
                           bgcolor: "#e2e8f0",
                           color: "#0f172a",
                           fontWeight: 800,
+                          borderRight: "1px solid #cbd5e1"
+                        }}
+                      >
+                        ATTACHMENT TIMESTAMP
+                      </TableCell>
+                      <TableCell
+                        sx={{
+                          bgcolor: "#e2e8f0",
+                          color: "#0f172a",
+                          fontWeight: 800,
                           
                         }}
                       >
@@ -696,13 +740,13 @@ const StatusOverview = () => {
                   <TableBody>
                     {reportsLoading ? (
                       <TableRow>
-                        <TableCell colSpan={8} align="center">
+                        <TableCell colSpan={9} align="center">
                           <CircularProgress size={22} />
                         </TableCell>
                       </TableRow>
                     ) : reports.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={8} align="center">
+                        <TableCell colSpan={9} align="center">
                           {hasTriggeredFetch
                             ? "No MLP ID records fetched."
                             : "Trigger the iFlow first to fetch data."}
@@ -733,6 +777,7 @@ const StatusOverview = () => {
                           <TableCell>{row.logEnd ? `${row.logEnd} IST` : "-"}</TableCell>
                           <TableCell>{row.errorInfo || "-"}</TableCell>
                           <TableCell>{row.attachmentName || "-"}</TableCell>
+                          <TableCell>{row.attachmentTimestamp ? `${row.attachmentTimestamp} IST` : "-"}</TableCell>
                           <TableCell>
                             <Stack direction="row" spacing={0.25} alignItems="center">
                               {/* <Button

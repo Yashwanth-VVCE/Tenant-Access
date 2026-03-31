@@ -6,6 +6,7 @@ const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
+const ExcelJS = require("exceljs");
 const app = express();
 const hana = require("@sap/hana-client");
 app.use(cors());
@@ -86,8 +87,13 @@ const decodePayload = (payload) => {
 const mapReportRow = (row, index) => {
   const decodedPayload = decodePayload(row.PAYLOAD);
   const attachmentBase = (row.ATTACHMENT_NAME || row.PAYLOAD_FILE_NAME || "").trim();
-  const logStamp = row.LOG_START ? String(row.LOG_START).replace(/[^\dA-Za-z]+/g, "_") : "";
-  const baseName = [attachmentBase || (row.MPL_ID ? `payload-${row.MPL_ID}` : `payload-${index + 1}`), logStamp]
+  const attachmentStamp = row.ATTACHMENT_TIMESTAMP
+    ? String(row.ATTACHMENT_TIMESTAMP).replace(/[^\dA-Za-z]+/g, "_")
+    : "";
+  const baseName = [
+    attachmentBase || (row.MPL_ID ? `payload-${row.MPL_ID}` : `payload-${index + 1}`),
+    attachmentStamp
+  ]
     .filter(Boolean)
     .join("_");
   const fileName = formatFileName(
@@ -141,6 +147,85 @@ const getReportRows = (conn) => {
 
   const rows = conn.exec(sql);
   return rows.map((row, index) => mapReportRow(row, index));
+};
+
+const getPayloadRow = (conn, mplId, logStart, attachmentTimestamp) => {
+  const sql = `
+    SELECT
+      "MPL_ID",
+      "LOG_START",
+      "ATTACHMENT_TIMESTAMP",
+      "PAYLOAD_FILE_NAME",
+      "PAYLOAD_FILE_TYPE",
+      "PAYLOAD_MIME_TYPE",
+      "PAYLOAD_ENCODING",
+      "PAYLOAD"
+    FROM "HACKTHON-POC"."CPI_DATA"
+    WHERE "MPL_ID" = ?
+      AND TO_VARCHAR("LOG_START", 'YYYY-MM-DD HH24:MI:SS') = ?
+      AND TO_VARCHAR("ATTACHMENT_TIMESTAMP", 'YYYY-MM-DD HH24:MI:SS') = ?
+    ORDER BY "CREATED_AT" DESC
+  `;
+
+  const stmt = conn.prepare(sql);
+  const rows = stmt.exec([mplId, logStart, attachmentTimestamp]);
+  return rows[0];
+};
+
+const createReportsExcelBuffer = async (reports, baseUrl) => {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Monitoring Overview", {
+    views: [{ state: "frozen", ySplit: 1 }]
+  });
+
+  sheet.columns = [
+    { header: "MPL ID", key: "mplId", width: 34 },
+    { header: "IFLOW NAME", key: "iflowName", width: 32 },
+    { header: "STATUS", key: "status", width: 16 },
+    { header: "LOG START", key: "logStart", width: 22 },
+    { header: "LOG END", key: "logEnd", width: 22 },
+    { header: "ERROR INFO", key: "errorInfo", width: 30 },
+    { header: "ATTACHMENT NAME", key: "attachmentName", width: 26 },
+    { header: "ATTACHMENT TIMESTAMP", key: "attachmentTimestamp", width: 24 },
+    { header: "PAYLOAD", key: "payloadFileName", width: 40 }
+  ];
+
+  sheet.getRow(1).font = { bold: true };
+  sheet.getRow(1).alignment = { vertical: "middle" };
+
+  reports.forEach((row) => {
+    sheet.addRow({
+      mplId: row.mplId || "",
+      iflowName: row.iflowName || "",
+      status: row.status || "",
+      logStart: row.logStart || "",
+      logEnd: row.logEnd || "",
+      errorInfo: row.errorInfo || "",
+      attachmentName: row.attachmentName || "",
+      attachmentTimestamp: row.attachmentTimestamp || "",
+      payloadFileName: row.payloadFileName || ""
+    });
+  });
+
+  const payloadCol = sheet.getColumn("payloadFileName");
+  payloadCol.eachCell({ includeEmpty: false }, (cell, rowNumber) => {
+    if (rowNumber === 1) return;
+    const report = reports[rowNumber - 2];
+    if (!report) return;
+    const query = new URLSearchParams({
+      mplId: report.mplId || "",
+      logStart: report.logStart || "",
+      attachmentTimestamp: report.attachmentTimestamp || ""
+    }).toString();
+    const linkBase = baseUrl || "http://localhost:5000";
+    cell.value = {
+      text: report.payloadFileName || "payload",
+      hyperlink: `${linkBase}/payload-file?${query}`
+    };
+    cell.font = { color: { argb: "FF0B84D6" }, underline: true };
+  });
+
+  return workbook.xlsx.writeBuffer();
 };
 
 const execFileAsync = (file, args) =>
@@ -694,6 +779,53 @@ app.get("/latest-report", async (req, res) => {
 
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    if (conn) conn.disconnect();
+  }
+});
+
+app.get("/payload-file", async (req, res) => {
+  const { mplId, logStart, attachmentTimestamp } = req.query;
+  if (!mplId || !logStart || !attachmentTimestamp) {
+    return res.status(400).json({ message: "mplId, logStart, attachmentTimestamp are required." });
+  }
+
+  let conn;
+  try {
+    conn = getConnection();
+    const row = getPayloadRow(conn, mplId, logStart, attachmentTimestamp);
+    if (!row) {
+      return res.status(404).json({ message: "Payload not found." });
+    }
+
+    const decoded = decodePayload(row.PAYLOAD);
+    const filename = formatFileName(row.PAYLOAD_FILE_NAME, row.PAYLOAD_FILE_TYPE, `payload-${mplId}`);
+    res.setHeader("Content-Type", row.PAYLOAD_MIME_TYPE || "text/plain");
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+    return res.send(decoded);
+  } catch (err) {
+    return res.status(500).json({ message: "Failed to load payload.", detail: err.message });
+  } finally {
+    if (conn) conn.disconnect();
+  }
+});
+
+app.get("/export-reports-excel", async (req, res) => {
+  let conn;
+  try {
+    conn = getConnection();
+    const reports = getReportRows(conn);
+    if (!reports.length) {
+      return res.status(404).json({ message: "No report data available." });
+    }
+
+    const buffer = await createReportsExcelBuffer(reports, req.protocol + "://" + req.get("host"));
+    const fileName = `${reports[0]?.iflowName || "Monitoring_Overview"}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    return res.send(buffer);
+  } catch (err) {
+    return res.status(500).json({ message: "Failed to export Excel.", detail: err.message });
   } finally {
     if (conn) conn.disconnect();
   }
