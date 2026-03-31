@@ -172,9 +172,12 @@ const getPayloadRow = (conn, mplId, logStart, attachmentTimestamp) => {
   return rows[0];
 };
 
-const createReportsExcelBuffer = async (reports, baseUrl) => {
+const createReportsExcelBuffer = async (reports) => {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Monitoring Overview", {
+    views: [{ state: "frozen", ySplit: 1 }]
+  });
+  const payloadSheet = workbook.addWorksheet("Payloads", {
     views: [{ state: "frozen", ySplit: 1 }]
   });
 
@@ -193,6 +196,15 @@ const createReportsExcelBuffer = async (reports, baseUrl) => {
   sheet.getRow(1).font = { bold: true };
   sheet.getRow(1).alignment = { vertical: "middle" };
 
+  payloadSheet.columns = [
+    { header: "MPL ID", key: "mplId", width: 34 },
+    { header: "ATTACHMENT TIMESTAMP", key: "attachmentTimestamp", width: 24 },
+    { header: "PAYLOAD", key: "payload", width: 120 }
+  ];
+
+  payloadSheet.getRow(1).font = { bold: true };
+  payloadSheet.getRow(1).alignment = { vertical: "middle" };
+
   reports.forEach((row) => {
     sheet.addRow({
       mplId: row.mplId || "",
@@ -205,6 +217,12 @@ const createReportsExcelBuffer = async (reports, baseUrl) => {
       attachmentTimestamp: row.attachmentTimestamp || "",
       payloadFileName: row.payloadFileName || ""
     });
+
+    payloadSheet.addRow({
+      mplId: row.mplId || "",
+      attachmentTimestamp: row.attachmentTimestamp || "",
+      payload: row.decodedPayload || ""
+    });
   });
 
   const payloadCol = sheet.getColumn("payloadFileName");
@@ -212,15 +230,10 @@ const createReportsExcelBuffer = async (reports, baseUrl) => {
     if (rowNumber === 1) return;
     const report = reports[rowNumber - 2];
     if (!report) return;
-    const query = new URLSearchParams({
-      mplId: report.mplId || "",
-      logStart: report.logStart || "",
-      attachmentTimestamp: report.attachmentTimestamp || ""
-    }).toString();
-    const linkBase = baseUrl || "http://localhost:5000";
+    const linkText = report.payloadFileName || "payload";
     cell.value = {
-      text: report.payloadFileName || "payload",
-      hyperlink: `${linkBase}/payload-file?${query}`
+      formula: `HYPERLINK("#Payloads!C${rowNumber}","${linkText}")`,
+      result: linkText
     };
     cell.font = { color: { argb: "FF0B84D6" }, underline: true };
   });
@@ -819,7 +832,7 @@ app.get("/export-reports-excel", async (req, res) => {
       return res.status(404).json({ message: "No report data available." });
     }
 
-    const buffer = await createReportsExcelBuffer(reports, req.protocol + "://" + req.get("host"));
+    const buffer = await createReportsExcelBuffer(reports);
     const fileName = `${reports[0]?.iflowName || "Monitoring_Overview"}.xlsx`;
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
