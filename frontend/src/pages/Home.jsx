@@ -28,13 +28,13 @@ const Home = () => {
     >
       <Container maxWidth="lg">
         <Grid container spacing={4} justifyContent="center">
-          <Grid size={{ xs: 12, md: 7 }}>
+          <Grid size={{ xs: 16, md: 9 }}>
             <Paper
               elevation={0}
               sx={{
                 height: "100%",
                 p: { xs: 4, md: 6 },
-                borderRadius: 3,
+                borderRadius: 2,
                 color: "#0f172a",
                 background:
                   "linear-gradient(160deg, rgba(255,255,255,0.94) 0%, rgba(240,249,255,0.95) 52%, rgba(224,242,254,0.96) 100%)",
@@ -48,21 +48,24 @@ const Home = () => {
                 sx={{
                   position: "absolute",
                   inset: "auto -10% -18% auto",
-                  width: 280,
-                  height: 280,
-                  borderRadius: "50%",
+                  width: 680,
+                  height: 680,
+                  borderRadius: "200%",
                   background: "radial-gradient(circle, rgba(59, 130, 246, 0.22), transparent 70%)",
                   filter: "blur(12px)"
                 }}
               />
-              <Stack spacing={3} sx={{ position: "relative", zIndex: 1 }}>
+              <Stack spacing={1} sx={{ position: "relative", zIndex: 1 }}>
                 <Chip
                   label="Tenant operations cockpit"
                   color="primary"
                   variant="outlined"
                   sx={{
                     alignSelf: "flex-start",
-                    fontWeight: 700,
+                    fontWeight: 1000,
+                    fontSize: 14,
+                    height: 36,
+                    px: 1.5,
                     borderColor: "rgba(14, 165, 233, 0.4)",
                     color: "primary.dark"
                   }}
