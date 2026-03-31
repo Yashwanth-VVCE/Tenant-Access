@@ -1,0 +1,4 @@
+CLIENT_ID = "sb-9e960e5e-c596-425f-8831-71481209b656!b63626|it!b16077"
+CLIENT_SECRET = "69f5a31a-b969-455e-b495-67981597fe9d$-kKmMIwwhvCkuBgs4RepaGvUztxtq6zoTuttnqAoL40="
+TOKEN_URL = "https://inccpidev.authentication.eu10.hana.ondemand.com/oauth/token"
+BASE_URL = "https://inccpidev.it-cpi001.cfapps.eu10.hana.ondemand.com"
