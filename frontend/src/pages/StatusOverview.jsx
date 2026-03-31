@@ -124,6 +124,7 @@ const StatusOverview = () => {
   const [artifactsLoading, setArtifactsLoading] = useState(true);
   const [reportsLoading, setReportsLoading] = useState(false);
   const [downloadAllLoading, setDownloadAllLoading] = useState(false);
+  const [excelLoading, setExcelLoading] = useState(false);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
   const [reports, setReports] = useState([]);
@@ -355,6 +356,7 @@ const StatusOverview = () => {
   };
 
   const downloadExcelReport = async () => {
+    setExcelLoading(true);
     try {
       const response = await fetch(`${API_BASE_URL}/export-reports-excel`);
       if (!response.ok) {
@@ -376,6 +378,8 @@ const StatusOverview = () => {
     } catch (error) {
       console.error("excel export failed", error);
       setFeedback("Failed to export Excel.");
+    } finally {
+      setExcelLoading(false);
     }
   };
 
@@ -611,16 +615,16 @@ const StatusOverview = () => {
                     disabled={reportsLoading || !hasTriggeredFetch}
                     sx={{ borderRadius: 2, alignSelf: "flex-start" }}
                   >
-                    {reportsLoading ? "Loading..." : "Refresh table"}
+                    {reportsLoading ? "Loading..." : "Refresh"}
                   </Button>
                   <Button
                     variant="outlined"
                     startIcon={<DownloadRoundedIcon />}
                     onClick={downloadExcelReport}
-                    disabled={!hasTriggeredFetch || reportsLoading || reports.length === 0}
+                    disabled={!hasTriggeredFetch || reportsLoading || reports.length === 0 || excelLoading}
                     sx={{ borderRadius: 2, alignSelf: "flex-start" }}
                   >
-                    Convert to Excel
+                    {excelLoading ? "Converting..." : "Convert to Excel"}
                   </Button>
                   <Button
                     variant="contained"
@@ -629,7 +633,7 @@ const StatusOverview = () => {
                     disabled={!hasTriggeredFetch || reportsLoading || downloadAllLoading || reports.length === 0}
                     sx={{ borderRadius: 2, alignSelf: "flex-start" }}
                   >
-                    {downloadAllLoading ? "Downloading..." : "Download all"}
+                    {downloadAllLoading ? "Downloading..." : "All payloads"}
                   </Button>
                 </Stack>
               </Stack>
