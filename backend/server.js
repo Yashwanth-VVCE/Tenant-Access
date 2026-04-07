@@ -7,14 +7,15 @@ const os = require("os");
 const path = require("path");
 const { execFile } = require("child_process");
 const ExcelJS = require("exceljs");
+const nodemailer = require("nodemailer");
 const app = express();
 const hana = require("@sap/hana-client");
 app.use(cors());
 app.use(express.json({ limit: '10mb' })); 
 app.use(express.text({ type: "text/*" }));
 
-const TOKEN_URL     = process.env.TOKEN_URL;
-const CLIENT_ID     = process.env.CLIENT_ID;
+const TOKEN_URL = process.env.TOKEN_URL;
+const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const TRIGGER_CLIENT_ID =
     process.env.TRIGGER_CLIENT_ID ||
@@ -25,18 +26,24 @@ const TRIGGER_CLIENT_SECRET =
     process.env.IFLOW_CLIENT_SECRET ||
     CLIENT_SECRET;
 const CPI_TRIGGER_ENDPOINT =
-    process.env.CPI_TRIGGER_ENDPOINT  ||
+    process.env.CPI_TRIGGER_ENDPOINT ||
     "https://inccpidev.it-cpi001-rt.cfapps.eu10.hana.ondemand.com/http/Trigger";
+const SMTP_HOST = process.env.SMTP_HOST;
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER;
+const SMTP_PASS = process.env.SMTP_PASS;
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
 
 const missingEnv = ["TOKEN_URL", "CLIENT_ID", "CLIENT_SECRET"].filter(
   (key) => !process.env[key]
 );
 if (missingEnv.length > 0) {
-  console.warn("Warning: missing .env variables:", missingEnv.join(", "),
-    "– some CPI features may not work");
+  console.warn(
+    "Warning: missing .env variables:",
+    missingEnv.join(", "),
+    "– some CPI features may not work"
+  );
 }
-
-
 
 function getConnection() {
   const conn = hana.createConnection();
@@ -177,9 +184,6 @@ const createReportsExcelBuffer = async (reports) => {
   const sheet = workbook.addWorksheet("Monitoring Overview", {
     views: [{ state: "frozen", ySplit: 1 }]
   });
-  const payloadSheet = workbook.addWorksheet("Payloads", {
-    views: [{ state: "frozen", ySplit: 1 }]
-  });
 
   sheet.columns = [
     { header: "MPL ID", key: "mplId", width: 34 },
@@ -190,20 +194,11 @@ const createReportsExcelBuffer = async (reports) => {
     { header: "ERROR INFO", key: "errorInfo", width: 30 },
     { header: "ATTACHMENT NAME", key: "attachmentName", width: 26 },
     { header: "ATTACHMENT TIMESTAMP", key: "attachmentTimestamp", width: 24 },
-    { header: "PAYLOAD", key: "payloadFileName", width: 40 }
+    { header: "PAYLOAD", key: "payload", width: 120 }
   ];
 
   sheet.getRow(1).font = { bold: true };
   sheet.getRow(1).alignment = { vertical: "middle" };
-
-  payloadSheet.columns = [
-    { header: "MPL ID", key: "mplId", width: 34 },
-    { header: "ATTACHMENT TIMESTAMP", key: "attachmentTimestamp", width: 24 },
-    { header: "PAYLOAD", key: "payload", width: 120 }
-  ];
-
-  payloadSheet.getRow(1).font = { bold: true };
-  payloadSheet.getRow(1).alignment = { vertical: "middle" };
 
   reports.forEach((row) => {
     sheet.addRow({
@@ -215,27 +210,8 @@ const createReportsExcelBuffer = async (reports) => {
       errorInfo: row.errorInfo || "",
       attachmentName: row.attachmentName || "",
       attachmentTimestamp: row.attachmentTimestamp || "",
-      payloadFileName: row.payloadFileName || ""
-    });
-
-    payloadSheet.addRow({
-      mplId: row.mplId || "",
-      attachmentTimestamp: row.attachmentTimestamp || "",
       payload: row.decodedPayload || ""
     });
-  });
-
-  const payloadCol = sheet.getColumn("payloadFileName");
-  payloadCol.eachCell({ includeEmpty: false }, (cell, rowNumber) => {
-    if (rowNumber === 1) return;
-    const report = reports[rowNumber - 2];
-    if (!report) return;
-    const linkText = report.payloadFileName || "payload";
-    cell.value = {
-      formula: `HYPERLINK("#Payloads!C${rowNumber}","${linkText}")`,
-      result: linkText
-    };
-    cell.font = { color: { argb: "FF0B84D6" }, underline: true };
   });
 
   return workbook.xlsx.writeBuffer();
@@ -243,8 +219,7 @@ const createReportsExcelBuffer = async (reports) => {
 
 const execFileAsync = (file, args) =>
   new Promise((resolve, reject) => {
-    execFile(file, args, (error, stdout, stderr) => 
-{
+    execFile(file, args, (error, stdout, stderr) => {
       if (error) {
         reject(stderr || error);
         return;
@@ -309,8 +284,23 @@ const createReportsZip = async (reports) => {
   }
 };
 
+const createMailTransport = () => {
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
+    throw new Error("SMTP configuration is incomplete");
+  }
+
+  return nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465,
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASS
+    }
+  });
+};
+
 const cleanUrl = (url) => url?.trim().replace(/\/+$/, "");
-let activeTenantConfig = null;
 const artifactCache = new Map();
 const ARTIFACT_CACHE_TTL_MS = 5 * 60 * 1000;
 const ARTIFACT_RETRY_LIMIT = 8;
@@ -335,8 +325,6 @@ const buildBaseUrlCandidates = (baseUrl) => {
 };
 
 const tenantHeaders = (token) => ({
-    // cconsole.log("Token -->", token);
-    
     Authorization: `Bearer ${token}`,
     Accept: "application/json"
 });
@@ -499,13 +487,6 @@ app.post("/connectTenant", async (req, res) => {
         const token = tokenResponse.data.access_token;
 
         const { apiBaseUrl, packages } = await fetchPackages(baseUrl, token);
-
-        activeTenantConfig = {
-            clientId,
-            clientSecret,
-            tokenUrl,
-            baseUrl: apiBaseUrl
-        };
 
         res.json({
             message: "Tenant Connected Successfully",
@@ -721,12 +702,7 @@ app.post("/trigger-cpi", async (req, res) => {
 
         console.log("trigger-cpi status:", response.status);
         console.log("trigger-cpi payload:", req.body);
-        console.log("Results are successfully fetched from HanaDB");
         return res.status(response.status).send(payload);
-            // success: response.status >= 200 && response.status < 300,
-            // credentialSource: credentials.source,
-            // endpoint: CPI_TRIGGER_ENDPOINT,
-            // status: response.status,
     } catch (err) {
         console.error("trigger-cpi error:", err.response?.data || err.message);
         const errorPayload = typeof err.response?.data==="string"?err.response.data:JSON.stringify(err.response?.data || err.message, null, 2);
@@ -743,11 +719,9 @@ app.post("/post-selection", async (req, res) => {
             message: "iflowName, status, fromDate, and toDate are required."
         });
     }
-
     if (!CPI_TRIGGER_ENDPOINT) {
         return res.status(500).json({ message: "CPI trigger endpoint not configured." });
     }
-
     try {
         const accessToken = await getAccessToken();
         const payload = {
@@ -756,7 +730,6 @@ app.post("/post-selection", async (req, res) => {
             fromDate,
             toDate
         };
-
         const response = await axios.post(CPI_TRIGGER_ENDPOINT, payload, {
             headers: {
                 Authorization: `Bearer ${accessToken}`,
@@ -764,7 +737,6 @@ app.post("/post-selection", async (req, res) => {
             },
             validateStatus: () => true
         });
-
         return res.status(response.status).json({
             message: "Posted to CPI successfully.",
             payload,
@@ -784,13 +756,10 @@ app.get("/latest-report", async (req, res) => {
   try {
     conn = getConnection();
     const reports = getReportRows(conn);
-
     if (!reports.length) {
       return res.json({ reports: [] });
     }
-
     res.json({ reports });
-
   } catch (err) {
     res.status(500).json({ error: err.message });
   } finally {
@@ -840,6 +809,52 @@ app.get("/export-reports-excel", async (req, res) => {
     return res.send(buffer);
   } catch (err) {
     return res.status(500).json({ message: "Failed to export Excel.", detail: err.message });
+  } finally {
+    if (conn) conn.disconnect();
+  }
+});
+
+app.post("/send-excel-email", async (req, res) => {
+  const { from, to, subject } = req.body || {};
+
+  if (!to) {
+    return res.status(400).json({ message: "Recipient address is required." });
+  }
+
+  let conn;
+  try {
+    conn = getConnection();
+    const reports = getReportRows(conn);
+    if (!reports.length) {
+      return res.status(404).json({ message: "No report data available." });
+    }
+
+    const buffer = await createReportsExcelBuffer(reports);
+    const fileName = `${reports[0]?.iflowName || "Monitoring_Overview"}.xlsx`;
+    const mailSubject = subject || `Monitoring Overview of ${reports[0]?.iflowName || "Iflow"}`;
+
+    const transporter = createMailTransport();
+    await transporter.sendMail({
+      from: from || SMTP_FROM,
+      to,
+      subject: mailSubject,
+      text: "Please find the monitoring overview attached.",
+      attachments: [
+        {
+          filename: fileName,
+          content: buffer,
+          contentType:
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+      ]
+    });
+
+    return res.json({ message: "Email sent successfully." });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Failed to send email.",
+      detail: err.message
+    });
   } finally {
     if (conn) conn.disconnect();
   }
