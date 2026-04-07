@@ -384,7 +384,7 @@ const StatusOverview = () => {
   };
 
   return (
-    <Box sx={{ minHeight: "100vh", pb: 8 }}>
+    <Box sx={{ minHeight: "100vh", pb: 8, background: "#ffffff" }}>
       <TopBar />
       <Container maxWidth="lg" sx={{ pt: { xs: 3, md: 5 } }}>
         <Stack spacing={2.5}>
@@ -395,7 +395,7 @@ const StatusOverview = () => {
               borderRadius: 2,
               border: "1px solid rgba(15, 23, 42, 0.08)",
               background:
-                "linear-gradient(135deg, rgba(29, 78, 216, 0.10), rgba(245, 158, 11, 0.08) 78%, rgba(255,255,255,0.96) 100%)"
+                "rgba(255, 255, 255, 0.62) 100%"
             }}
           >
             <Typography variant="h5">Status Overview</Typography>

@@ -243,7 +243,8 @@ const createReportsExcelBuffer = async (reports) => {
 
 const execFileAsync = (file, args) =>
   new Promise((resolve, reject) => {
-    execFile(file, args, (error, stdout, stderr) => {
+    execFile(file, args, (error, stdout, stderr) => 
+{
       if (error) {
         reject(stderr || error);
         return;

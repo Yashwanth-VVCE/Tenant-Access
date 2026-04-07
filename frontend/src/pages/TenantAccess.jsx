@@ -82,51 +82,71 @@ const TenantAccess = () => {
       sx={{
         minHeight: "100vh",
         background:
-          "radial-gradient(circle at 10% 12%, rgba(94, 234, 212, 0.35), transparent 36%), radial-gradient(circle at 90% 20%, rgba(56, 189, 248, 0.28), transparent 40%), linear-gradient(150deg, #f7fafc 0%, #eef2f7 45%, #e2e8f0 100%)",
+          "linear-gradient(150deg, #ffffff 0%, #ffffff 45%, #ffffff 100%)",
         display: "flex",
         flexDirection: "column"
       }}
     >
       <TopBar />
 
+      {message && (
+        <Box
+          sx={{
+            position: "absolute",
+            top: 110,
+            left: { xs: 16, md: 24 },
+            zIndex: 2,
+            width: { xs: "calc(100% - 32px)", sm: 360 }
+          }}
+        >
+          <Alert
+            severity={isError ? "error" : "success"}
+            sx={{
+              borderRadius: 2,
+              boxShadow: "0 18px 34px rgba(15, 23, 42, 0.18)",
+              border: "1px solid rgba(15, 23, 42, 0.12)"
+            }}
+          >
+            {message}
+          </Alert>
+        </Box>
+      )}
+
       <Container
         maxWidth="sm"
         sx={{
           flex: 1,
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
-          justifyContent: "center"
+          justifyContent: "center",
+          gap: { xs: 2, md: 3 },
+          py: { xs: 4, md: 6 }
         }}
       >
         <Paper
           elevation={8}
           sx={{
             width: "100%",
-            p: 4,
+            p: { xs: 3, md: 4 },
             borderRadius: 3,
             backdropFilter: "blur(10px)",
             background: "rgba(255,255,255,0.92)",
             border: "1px solid rgba(148, 163, 184, 0.35)",
-            boxShadow: "0 24px 60px rgba(15, 23, 42, 0.12)"
+            boxShadow: "0 28px 70px rgba(15, 23, 42, 0.18)"
           }}
         >
           <Stack spacing={2} component="form" onSubmit={handleSubmit}>
 
             <Stack spacing={2} alignItems="center">
               <Typography variant="h4" fontWeight="bold">
-                Tenant Access
+                Access Tenant
               </Typography>
 
               <Typography variant="body2" color="text.secondary">
                 Connect your SAP tenant using Client Credentials
               </Typography>
             </Stack>
-
-            {message && (
-              <Alert severity={isError ? "error" : "success"}>
-                {message}
-              </Alert>
-            )}
 
             <TextField
               label="Client ID"
@@ -202,7 +222,7 @@ const TenantAccess = () => {
                   "linear-gradient(90deg,#0b84d6,#4cc3ff)"
               }}
             >
-              {isLoading ? "Connecting..." : "Connect Tenant"}
+              {isLoading ? "Connecting..." : "Connect"}
             </Button>
 
           </Stack>

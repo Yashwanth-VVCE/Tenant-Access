@@ -16,6 +16,7 @@ import {
   TextField,
   Typography
 } from "@mui/material";
+import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import { useNavigate } from "react-router-dom";
 
 const LoginModal = ({ closeModal }) => {
@@ -51,7 +52,11 @@ const LoginModal = ({ closeModal }) => {
   return (
     <Dialog
       open
-      onClose={closeModal}
+      onClose={(_, reason) => {
+        if (reason === "backdropClick") return;
+        closeModal();
+      }}
+      disableEscapeKeyDown
       fullWidth
       maxWidth="xs"
       PaperProps={{
@@ -59,7 +64,8 @@ const LoginModal = ({ closeModal }) => {
           borderRadius: 3,
           overflow: "hidden",
           border: "1px solid rgba(148, 163, 184, 0.35)",
-          boxShadow: "0 28px 70px rgba(15, 23, 42, 0.18)"
+          boxShadow: "0 28px 70px rgba(15, 23, 42, 0.18)",
+          minHeight: 120
         }
       }}
     >
@@ -70,15 +76,20 @@ const LoginModal = ({ closeModal }) => {
           </Avatar>
           <Box>
             <Typography variant="h5">Sign in</Typography>
-            <Typography variant="body2" color="text.secondary">
-              Access the tenant monitor workspace
-            </Typography>
           </Box>
         </Stack>
+        <IconButton
+          aria-label="close"
+          onClick={closeModal}
+          sx={{ position: "absolute", right: 12, top: 12, color: "error.main" }}
+        >
+          <CloseRoundedIcon />
+        </IconButton>
       </DialogTitle>
-      <DialogContent>
-        <Stack component="form" spacing={2.5} onSubmit={handleLogin}>
+      <DialogContent sx={{ pt: 2 }}>
+        <Stack component="form" spacing={3.5} onSubmit={handleLogin}>
           {error && <Alert severity="error">{error}</Alert>}
+          <Box sx={{ pt: 1 }} />
           <TextField
             label="Username"
             value={username}
@@ -105,12 +116,9 @@ const LoginModal = ({ closeModal }) => {
               }
             }}
           />
-          <Stack direction="row" spacing={1.5} justifyContent="flex-end">
-            <Button color="inherit" onClick={closeModal}>
-              Cancel
-            </Button>
+          <Stack direction="row" spacing={1.5} justifyContent="center">
             <Button type="submit" variant="contained">
-              Enter portal
+              Submit
             </Button>
           </Stack>
         </Stack>

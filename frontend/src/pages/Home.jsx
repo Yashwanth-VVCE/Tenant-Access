@@ -1,5 +1,4 @@
-import React, { useState } from "react";
-import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
+import React from "react";
 import {
   Box,
   Button,
@@ -8,88 +7,82 @@ import {
   Grid,
   Paper,
   Stack,
-  Typography
 } from "@mui/material";
-import LoginModal from "../components/LoginModal";
+import { useNavigate } from "react-router-dom";
 
 const Home = () => {
-  const [showLogin, setShowLogin] = useState(false);
-
+  const navigate = useNavigate();
   return (
     <Box
       sx={{
         minHeight: "100vh",
-        background:
-          "radial-gradient(circle at 12% 18%, rgba(14, 165, 233, 0.28), transparent 40%), radial-gradient(circle at 88% 12%, rgba(59, 130, 246, 0.25), transparent 42%), linear-gradient(150deg, #f7fafc 0%, #eef2f7 40%, #e2e8f0 100%)",
-        py: { xs: 4, md: 8 },
+        background: "#ffffff",
+        py: { xs: 6, md: 10 },
         display: "flex",
         alignItems: "center"
       }}
     >
-      <Container maxWidth="lg">
+      <Container maxWidth="md">
         <Grid container spacing={4} justifyContent="center">
-          <Grid size={{ xs: 16, md: 9 }}>
+          <Grid size={{ xs: 12, md: 7 }}>
             <Paper
               elevation={0}
               sx={{
-                height: "100%",
+                height: { xs: "auto", md: 420 },
                 p: { xs: 4, md: 6 },
                 borderRadius: 2,
                 color: "#0f172a",
-                background:
-                  "linear-gradient(160deg, rgba(255,255,255,0.94) 0%, rgba(240,249,255,0.95) 52%, rgba(224,242,254,0.96) 100%)",
+                background: "#f6f8fb",
                 position: "relative",
                 overflow: "hidden",
-                border: "1px solid rgba(14, 165, 233, 0.25)",
+                border: "1px solid rgba(15, 23, 42, 0.12)",
                 boxShadow: "0 24px 60px rgba(15, 23, 42, 0.12)"
               }}
             >
-              <Box
-                sx={{
-                  position: "absolute",
-                  inset: "auto -10% -18% auto",
-                  width: 680,
-                  height: 680,
-                  borderRadius: "200%",
-                  background: "radial-gradient(circle, rgba(59, 130, 246, 0.22), transparent 70%)",
-                  filter: "blur(12px)"
-                }}
-              />
-              <Stack spacing={1} sx={{ position: "relative", zIndex: 1 }}>
+              <Stack spacing={3} sx={{ position: "relative", zIndex: 1, height: "100%" }} justifyContent="center">
+                <Box
+                  component="img"
+                  src="/Incture_Technologies_Logo.jpg"
+                  alt="Incture"
+                  sx={{
+                    width: "100%",
+                    maxWidth: 220,
+                    height: "auto",
+                    alignSelf: "center"
+                  }}
+                />
                 <Chip
-                  label="Tenant operations cockpit"
+                  label="CPI Monitoring Overview"
                   color="primary"
                   variant="outlined"
                   sx={{
-                    alignSelf: "flex-start",
+                    alignSelf: "center",
                     fontWeight: 1000,
-                    fontSize: 14,
-                    height: 36,
-                    px: 1.5,
-                    borderColor: "rgba(14, 165, 233, 0.4)",
+                    fontSize: 20,
+                    height: 46,
+                    px: 4.5,
+                    borderColor: "rgba(11, 132, 214, 0.4)",
                     color: "primary.dark"
                   }}
                 />
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                   <Button
                     size="large"
                     variant="contained"
                     color="primary"
-                    endIcon={<ArrowForwardRoundedIcon />}
-                    onClick={() => setShowLogin(true)}
+                    onClick={() => navigate("/login")}
                     sx={{
-                      background: "linear-gradient(90deg, #0b84d6 0%, #4cc3ff 100%)"
+                      alignSelf: "center",
+                      background: "linear-gradient(90deg, #70bbec 0%, #372794 120%)",
                     }}
                   >
-                    Open Portal
+                    Login
                   </Button>
-                </Stack>
+
               </Stack>
             </Paper>
           </Grid>
         </Grid>
       </Container>
-      {showLogin && <LoginModal closeModal={() => setShowLogin(false)} />}
     </Box>
   );
 };
