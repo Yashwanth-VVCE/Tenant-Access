@@ -1,0 +1,60 @@
+.landing-container{
+  height:100vh;
+  background:#ffffff;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  font-family:"Google Sans","Segoe UI",sans-serif;
+}
+
+.landing-wrapper{
+  width:100%;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
+
+.landing-card{
+  width:520px;
+  padding:70px 56px;
+  text-align:center;
+  border-radius:20px;
+  background:#f7f9ff;
+  border:1px solid rgba(15,23,42,.08);
+  box-shadow:0 30px 70px rgba(15,23,42,.12);
+}
+
+.landing-logo{
+  width:220px;
+  height:120px;
+  margin-bottom:10px;
+}
+
+.landing-title{
+  margin:0;
+  font-size:28px;
+  font-weight:800;
+  color:#1e293b;
+  margin-bottom:40px;
+}
+
+
+.login-btn{
+  width:100%;
+  padding:15px;
+  border-radius:40px;
+  border:none;
+  font-size:16px;
+  font-weight:700;
+  color:white;
+  background:linear-gradient(90deg,#787aff,#799be4);
+  cursor:pointer;
+  box-shadow:0 15px 40px rgba(255, 255, 255, 0.35);
+  transition:.25s;
+}
+
+.login-btn:hover{
+  box-shadow:0 20px 55px rgb(255, 255, 255);
+  filter:brightness(1.05);
+  transform:translateY(-2px);
+}

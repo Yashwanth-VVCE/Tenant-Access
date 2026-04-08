@@ -125,6 +125,13 @@ const StatusOverview = () => {
   const [reportsLoading, setReportsLoading] = useState(false);
   const [downloadAllLoading, setDownloadAllLoading] = useState(false);
   const [excelLoading, setExcelLoading] = useState(false);
+  const [feedbackType, setFeedbackType] = useState("");
+  const [excelDialogOpen, setExcelDialogOpen] = useState(false);
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [emailFrom, setEmailFrom] = useState("");
+  const [emailTo, setEmailTo] = useState("");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailSending, setEmailSending] = useState(false);
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
   const [reports, setReports] = useState([]);
@@ -148,6 +155,7 @@ const StatusOverview = () => {
     } catch (reportError) {
       console.error("failed to load reports", reportError);
       setFeedback("Failed to load data.");
+      setFeedbackType("error");
     } finally {
       setReportsLoading(false);
     }
@@ -246,6 +254,7 @@ const StatusOverview = () => {
   const triggerIflow = async () => {
     setError("");
     setFeedback("");
+    setFeedbackType("");
     setReports([]);
     setSelectedPayloadRow(null);
     setHasTriggeredFetch(false);
@@ -289,6 +298,7 @@ const StatusOverview = () => {
       }
 
       setFeedback("Triggered. Fetching latest data...");
+      setFeedbackType("info");
       setHasTriggeredFetch(true);
       setTimeout(() => {
         loadReports();
@@ -302,9 +312,11 @@ const StatusOverview = () => {
             ? `Trigger failed. MPL ID: ${mplId}`
             : "Trigger failed."
       );
+      setFeedbackType(response.ok ? "success" : "warning");
     } catch (requestError) {
       console.error("failed to trigger CPI:", requestError);
       setFeedback("Trigger failed.");
+      setFeedbackType("error");
     } finally {
       setLoading(false);
     }
@@ -350,6 +362,7 @@ const StatusOverview = () => {
     } catch (downloadError) {
       console.error("failed to download payload zip", downloadError);
       setFeedback("Failed to download all payload files.");
+      setFeedbackType("error");
     } finally {
       setDownloadAllLoading(false);
     }
@@ -378,8 +391,54 @@ const StatusOverview = () => {
     } catch (error) {
       console.error("excel export failed", error);
       setFeedback("Failed to export Excel.");
+      setFeedbackType("error");
     } finally {
       setExcelLoading(false);
+    }
+  };
+
+  const openExcelOptions = () => {
+    const iflowName = reports[0]?.iflowName || "Iflow";
+    setEmailSubject(`Monitoring Overview of ${iflowName}`);
+    setExcelDialogOpen(true);
+  };
+
+  const openEmailDialog = () => {
+    setExcelDialogOpen(false);
+    setEmailDialogOpen(true);
+  };
+
+  const sendExcelEmail = async () => {
+    setEmailSending(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/send-excel-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: emailFrom,
+          to: emailTo,
+          subject: emailSubject
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to send email.");
+      }
+
+      setFeedback("Email sent.");
+      setFeedbackType("success");
+      setTimeout(() => {
+        setFeedback("");
+        setFeedbackType("");
+      }, 5000);
+      setEmailDialogOpen(false);
+    } catch (error) {
+      console.error("email send failed", error);
+      setFeedback("Failed to send email.");
+      setFeedbackType("error");
+    } finally {
+      setEmailSending(false);
     }
   };
 
@@ -530,7 +589,11 @@ const StatusOverview = () => {
               )}
 
               {error && <Alert severity="error">{error}</Alert>}
-              {feedback && <Alert severity={feedback === "Triggered." ? "success" : "warning"}>{feedback}</Alert>}
+              {feedback && (
+                <Alert severity={feedbackType || (feedback === "Triggered." ? "success" : "warning")}>
+                  {feedback}
+                </Alert>
+              )}
 
               {/* {resolvedBaseUrl && (
                 <Typography variant="body2" color="text.secondary">
@@ -559,6 +622,7 @@ const StatusOverview = () => {
                     setFromDate(toDateTimeInputValue(new Date(Date.now() - 24 * 60 * 60 * 1000)));
                     setToDate(toDateTimeInputValue(new Date()));
                     setFeedback("");
+                    setFeedbackType("");
                     setError("");
                     setReports([]);
                     setSelectedPayloadRow(null);
@@ -620,7 +684,7 @@ const StatusOverview = () => {
                   <Button
                     variant="outlined"
                     startIcon={<DownloadRoundedIcon />}
-                    onClick={downloadExcelReport}
+                    onClick={openExcelOptions}
                     disabled={!hasTriggeredFetch || reportsLoading || reports.length === 0 || excelLoading}
                     sx={{ borderRadius: 2, alignSelf: "flex-start" }}
                   >
@@ -871,6 +935,70 @@ const StatusOverview = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSelectedPayloadRow(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={excelDialogOpen}
+        onClose={() => setExcelDialogOpen(false)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>Convert to Excel</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Stack spacing={2}>
+            <Button
+              variant="contained"
+              onClick={downloadExcelReport}
+              disabled={excelLoading}
+            >
+              {excelLoading ? "Converting..." : "Download Excel"}
+            </Button>
+            <Button variant="outlined" onClick={openEmailDialog}>
+              Send Email
+            </Button>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setExcelDialogOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={emailDialogOpen}
+        onClose={() => setEmailDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Send Email</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Stack spacing={2}>
+            <TextField
+              label="From"
+              value={emailFrom}
+              onChange={(event) => setEmailFrom(event.target.value)}
+            />
+            <TextField
+              label="To"
+              value={emailTo}
+              onChange={(event) => setEmailTo(event.target.value)}
+            />
+            <TextField
+              label="Subject"
+              value={emailSubject}
+              onChange={(event) => setEmailSubject(event.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEmailDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={sendExcelEmail}
+            disabled={!emailTo || emailSending}
+          >
+            {emailSending ? "Sending..." : "Send"}
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

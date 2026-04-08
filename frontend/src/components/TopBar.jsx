@@ -46,7 +46,7 @@ const TopBar = () => {
           <Stack direction="row" spacing={1.5} alignItems="center">
             <Box
               component="img"
-              src="/Incture_Technologies_Logo.jpg"
+              src="/Incture_Technologies_Logo.png"
               alt="Incture"
               sx={{
                 height: 60,
