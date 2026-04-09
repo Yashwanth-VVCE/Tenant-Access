@@ -131,7 +131,7 @@ const TenantAccess = () => {
             p: { xs: 3, md: 4 },
             borderRadius: 3,
             backdropFilter: "blur(10px)",
-            background: "rgba(255,255,255,0.92)",
+            background: "linear-gradient(150deg, rgba(112, 151, 156, 0.48) 0%, rgba(100, 152, 231, 0.44) 100%)",
             border: "1px solid rgba(148, 163, 184, 0.35)",
             boxShadow: "0 28px 70px rgba(15, 23, 42, 0.18)"
           }}
