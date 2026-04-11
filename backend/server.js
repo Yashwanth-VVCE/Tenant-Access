@@ -10,7 +10,7 @@ const ExcelJS = require("exceljs");
 const nodemailer = require("nodemailer");
 const app = express();
 const hana = require("@sap/hana-client");
-app.use(cors());
+app.use(cors({ origin: "https://message-monitoring.cfapps.us10-001.hana.ondemand.com" }))
 app.use(express.json({ limit: '10mb' })); 
 app.use(express.text({ type: "text/*" }));
 
