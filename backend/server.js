@@ -10,7 +10,7 @@ const ExcelJS = require("exceljs");
 const nodemailer = require("nodemailer");
 const app = express();
 const hana = require("@sap/hana-client");
-app.use(cors({ origin: "https://message-monitoring.cfapps.us10-001.hana.ondemand.com" }))
+app.use(cors({ origin: "https://message-monitoring.cfapps.us10-001.hana.ondemand.com" }));
 app.use(express.json({ limit: '10mb' })); 
 app.use(express.text({ type: "text/*" }));
 
@@ -376,7 +376,7 @@ const fetchArtifactsForPackage = async (baseUrl, token, packageId) => {
                     `${candidate}/api/v1/IntegrationPackages('${encodedPackageId}')/IntegrationDesigntimeArtifacts`,
                     {
                         headers: tenantHeaders(token),
-                        timeout: 30000
+                        timeout: 60000
                     }
                 );
 
@@ -418,20 +418,38 @@ const fetchArtifactsForPackage = async (baseUrl, token, packageId) => {
 
 const fetchArtifactsForPackagesInBatches = async (baseUrl, token, packages) => {
     const results = [];
+    const failedPackages = [];
 
     for (let index = 0; index < packages.length; index += ARTIFACT_BATCH_CONCURRENCY) {
         const batch = packages.slice(index, index + ARTIFACT_BATCH_CONCURRENCY);
-        const batchResults = await Promise.all(
+        const batchResults = await Promise.allSettled(
             batch.map(async (pkg) => ({
                 packageId: pkg.Id,
                 artifacts: await fetchArtifactsForPackage(baseUrl, token, pkg.Id)
             }))
         );
 
-        results.push(...batchResults);
+        batchResults.forEach((result, batchIndex) => {
+            const packageId = batch[batchIndex]?.Id;
+
+            if (result.status === "fulfilled") {
+                results.push(result.value);
+                return;
+            }
+
+            failedPackages.push({
+                packageId,
+                error: result.reason?.message || String(result.reason || "Unknown artifact fetch error")
+            });
+
+            console.warn(
+                `Skipping artifacts for package ${packageId} after batch failure:`,
+                result.reason?.response?.data || result.reason?.message || result.reason
+            );
+        });
     }
 
-    return results;
+    return { results, failedPackages };
 };
 
 const getArtifactCacheEntry = (cacheKey) => {
@@ -515,6 +533,7 @@ app.post("/getArtifacts", async (req, res) => {
 
     try {
         let artifacts = [];
+        let failedPackages = [];
         const { apiBaseUrl, packages } = await fetchPackages(baseUrl, token);
         const cacheKey = `${apiBaseUrl}::${packageId || "All"}`;
         const cachedArtifacts = getArtifactCacheEntry(cacheKey);
@@ -543,9 +562,14 @@ app.post("/getArtifacts", async (req, res) => {
                 }
             });
 
-            const fetchedPackageResults = missingPackages.length
+            const {
+                results: fetchedPackageResults,
+                failedPackages: nextFailedPackages
+            } = missingPackages.length
                 ? await fetchArtifactsForPackagesInBatches(apiBaseUrl, token, missingPackages)
-                : [];
+                : { results: [], failedPackages: [] };
+
+            failedPackages = nextFailedPackages;
 
             fetchedPackageResults.forEach(({ packageId: fetchedPackageId, artifacts: fetchedArtifacts }) => {
                 artifactCache.set(`${apiBaseUrl}::${fetchedPackageId}`, {
@@ -571,7 +595,13 @@ app.post("/getArtifacts", async (req, res) => {
             expiresAt: Date.now() + ARTIFACT_CACHE_TTL_MS
         });
 
-        res.json({ artifacts, packages, baseUrl: apiBaseUrl });
+        res.json({
+            artifacts,
+            packages,
+            baseUrl: apiBaseUrl,
+            partial: packageId === "All",
+            failedPackages: packageId === "All" ? failedPackages : []
+        });
 
     } catch (error) {
         console.error("getArtifacts error:", error.response?.data || error.message);

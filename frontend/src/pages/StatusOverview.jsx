@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import SendRoundedIcon from "@mui/icons-material/SendRounded";
@@ -139,6 +139,7 @@ const StatusOverview = () => {
   const [resolvedBaseUrl, setResolvedBaseUrl] = useState(baseUrl || "");
   const [hasTriggeredFetch, setHasTriggeredFetch] = useState(false);
   const [artifactMenuOpened, setArtifactMenuOpened] = useState(false);
+  const artifactRequestIdRef = useRef(0);
 
   const loadReports = async () => {
     setReportsLoading(true);
@@ -162,10 +163,15 @@ const StatusOverview = () => {
   };
 
   useEffect(() => {
+    const requestId = ++artifactRequestIdRef.current;
+    const controller = new AbortController();
+
     async function loadArtifacts() {
       if (!token || !baseUrl) {
-        setArtifacts([]);
-        setArtifactsLoading(false);
+        if (artifactRequestIdRef.current === requestId) {
+          setArtifacts([]);
+          setArtifactsLoading(false);
+        }
         return;
       }
 
@@ -173,9 +179,12 @@ const StatusOverview = () => {
         (selectedPackage && selectedPackage !== "All") || artifactMenuOpened;
 
       if (!shouldLoadArtifacts) {
-        setArtifacts([]);
-        setSelectedArtifact("All");
-        setArtifactsLoading(false);
+        if (artifactRequestIdRef.current === requestId) {
+          setArtifacts([]);
+          setSelectedArtifact("All");
+          setArtifactsLoading(false);
+          setError("");
+        }
         return;
       }
 
@@ -186,6 +195,7 @@ const StatusOverview = () => {
         const resp = await fetch(`${API_BASE_URL}/getArtifacts`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             packageId:
               selectedPackage && selectedPackage !== "All"
@@ -199,6 +209,10 @@ const StatusOverview = () => {
 
         if (!resp.ok) {
           throw new Error(data.message || data.detail || "Failed to load artifacts.");
+        }
+
+        if (artifactRequestIdRef.current !== requestId) {
+          return;
         }
 
         const nextArtifacts = Array.from(
@@ -219,14 +233,23 @@ const StatusOverview = () => {
           setResolvedBaseUrl(data.baseUrl);
         }
       } catch (loadError) {
+        if (loadError.name === "AbortError" || artifactRequestIdRef.current !== requestId) {
+          return;
+        }
         console.error("failed to load artifacts", loadError);
         setError("Failed to load artifacts.");
       } finally {
-        setArtifactsLoading(false);
+        if (artifactRequestIdRef.current === requestId) {
+          setArtifactsLoading(false);
+        }
       }
     }
 
     loadArtifacts();
+
+    return () => {
+      controller.abort();
+    };
   }, [token, baseUrl, selectedPackage, artifactMenuOpened]);
 
   const packageOptions = useMemo(() => {
