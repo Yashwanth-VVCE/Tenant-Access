@@ -17,6 +17,7 @@ import {
   InputAdornment,
   IconButton,
   Paper,
+  Pagination,
   Stack,
   Table,
   TableBody,
@@ -101,6 +102,46 @@ const getRangeForTime = (timeRange, customFromDate, customToDate) => {
   }
 };
 
+const ROWS_PER_PAGE = 25;
+
+const beautifyXml = (xmlText) => {
+  const raw = typeof xmlText === "string" ? xmlText.trim() : "";
+
+  if (!raw) {
+    return "";
+  }
+
+  const parser = new DOMParser();
+  const xmlDoc = parser.parseFromString(raw, "application/xml");
+  const parserError = xmlDoc.querySelector("parsererror");
+
+  if (parserError) {
+    return null;
+  }
+
+  const serialized = new XMLSerializer().serializeToString(xmlDoc);
+  const tokens = serialized.replace(/(>)(<)(\/*)/g, "$1\n$2$3").split("\n");
+  let indentLevel = 0;
+
+  return tokens
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .map((token) => {
+      if (token.match(/^<\//)) {
+        indentLevel = Math.max(indentLevel - 1, 0);
+      }
+
+      const line = `${"  ".repeat(indentLevel)}${token}`;
+
+      if (token.match(/^<[^!?/][^>]*[^/]>/)) {
+        indentLevel += 1;
+      }
+
+      return line;
+    })
+    .join("\n");
+};
+
 const StatusOverview = () => {
   const token = localStorage.getItem("token");
   const baseUrl = localStorage.getItem("baseUrl");
@@ -111,7 +152,7 @@ const StatusOverview = () => {
       return [];
     }
   });
-  const [selectedPackage, setSelectedPackage] = useState("All");
+  const [selectedPackage, setSelectedPackage] = useState(null);
   const [artifacts, setArtifacts] = useState([]);
   const [selectedArtifact, setSelectedArtifact] = useState("All");
   const [status, setStatus] = useState("All");
@@ -136,13 +177,16 @@ const StatusOverview = () => {
   const [feedback, setFeedback] = useState("");
   const [reports, setReports] = useState([]);
   const [selectedPayloadRow, setSelectedPayloadRow] = useState(null);
+  const [payloadViewMode, setPayloadViewMode] = useState("raw");
   const [resolvedBaseUrl, setResolvedBaseUrl] = useState(baseUrl || "");
   const [hasTriggeredFetch, setHasTriggeredFetch] = useState(false);
-  const [artifactMenuOpened, setArtifactMenuOpened] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
   const artifactRequestIdRef = useRef(0);
 
   const loadReports = async () => {
     setReportsLoading(true);
+    setFeedback("");
+    setFeedbackType("");
 
     try {
       const response = await fetch(`${API_BASE_URL}/latest-report`);
@@ -153,6 +197,8 @@ const StatusOverview = () => {
       }
 
       setReports(Array.isArray(data.reports) ? data.reports : []);
+      setHasTriggeredFetch(true);
+      setCurrentPage(1);
     } catch (reportError) {
       console.error("failed to load reports", reportError);
       setFeedback("Failed to load data.");
@@ -176,7 +222,7 @@ const StatusOverview = () => {
       }
 
       const shouldLoadArtifacts =
-        (selectedPackage && selectedPackage !== "All") || artifactMenuOpened;
+        Boolean(selectedPackage?.Id);
 
       if (!shouldLoadArtifacts) {
         if (artifactRequestIdRef.current === requestId) {
@@ -197,10 +243,7 @@ const StatusOverview = () => {
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
           body: JSON.stringify({
-            packageId:
-              selectedPackage && selectedPackage !== "All"
-                ? selectedPackage.Id
-                : "All",
+            packageId: selectedPackage.Id,
             token,
             baseUrl
           })
@@ -250,7 +293,7 @@ const StatusOverview = () => {
     return () => {
       controller.abort();
     };
-  }, [token, baseUrl, selectedPackage, artifactMenuOpened]);
+  }, [token, baseUrl, selectedPackage]);
 
   const packageOptions = useMemo(() => {
     const uniquePackages = Array.from(
@@ -259,14 +302,11 @@ const StatusOverview = () => {
       ).values()
     );
 
-    return [
-      "All",
-      ...uniquePackages
-        .slice()
-        .sort((left, right) =>
-          (left.Name || left.Id || "").localeCompare(right.Name || right.Id || "")
-        )
-    ];
+    return uniquePackages
+      .slice()
+      .sort((left, right) =>
+        (left.Name || left.Id || "").localeCompare(right.Name || right.Id || "")
+      );
   }, [packages]);
 
   const artifactOptions = useMemo(
@@ -284,6 +324,11 @@ const StatusOverview = () => {
 
     const range = getRangeForTime(timeRange, fromDate, toDate);
 
+    if (!selectedPackage?.Id) {
+      setError("Select package.");
+      return;
+    }
+
     if (timeRange === "Custom" && (!range.fromDate || !range.toDate)) {
       setError("Select from and to date.");
       return;
@@ -299,8 +344,8 @@ const StatusOverview = () => {
     try {
       const payload = {
         BASE_URL: resolvedBaseUrl || baseUrl || "",
-        IFLOW_NAME: selectedArtifact,
-        STATUS: status,
+        IFLOW_NAME: selectedArtifact === "All" ? "" : selectedArtifact,
+        STATUS: status === "All" ? "" : status,
         FROM_DATE: range.fromDate,
         TO_DATE: range.toDate
       };
@@ -330,7 +375,7 @@ const StatusOverview = () => {
       const mplId = getMplId(responseBody?.response || responseBody);
       setFeedback(
         response.ok
-          ? "Triggered."
+          ? "Completed."
           : mplId
             ? `Trigger failed. MPL ID: ${mplId}`
             : "Trigger failed."
@@ -465,6 +510,37 @@ const StatusOverview = () => {
     }
   };
 
+  const filteredReports = useMemo(() => {
+    return reports.filter((report) => {
+      const matchesArtifact =
+        selectedArtifact === "All" || !selectedArtifact || report.iflowName === selectedArtifact;
+      const matchesStatus = status === "All" || report.status === status;
+
+      return matchesArtifact && matchesStatus;
+    });
+  }, [reports, selectedArtifact, status]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredReports.length / ROWS_PER_PAGE));
+
+  const paginatedReports = useMemo(() => {
+    const startIndex = (currentPage - 1) * ROWS_PER_PAGE;
+    return filteredReports.slice(startIndex, startIndex + ROWS_PER_PAGE);
+  }, [filteredReports, currentPage]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedArtifact, status, reports]);
+
+  const beautifiedPayload = useMemo(
+    () => beautifyXml(selectedPayloadRow?.decodedPayload || ""),
+    [selectedPayloadRow]
+  );
+
+  const payloadContent =
+    payloadViewMode === "beautified" && beautifiedPayload
+      ? beautifiedPayload
+      : selectedPayloadRow?.decodedPayload || "No payload available.";
+
   return (
     <Box sx={{ minHeight: "100vh", pb: 8, background: "#ffffff" }}>
       <TopBar />
@@ -498,14 +574,17 @@ const StatusOverview = () => {
                   fullWidth
                   options={packageOptions}
                   value={selectedPackage}
-                  onChange={(_, value) => setSelectedPackage(value || "All")}
+                  onChange={(_, value) => {
+                    setSelectedPackage(value || null);
+                    setSelectedArtifact("All");
+                    setArtifacts([]);
+                    setError("");
+                  }}
                   getOptionLabel={(option) =>
                     typeof option === "string" ? option : option.Name || option.Id || "Unnamed Package"
                   }
                   isOptionEqualToValue={(option, value) =>
-                    typeof option === "string" || typeof value === "string"
-                      ? option === value
-                      : option.Id === value.Id
+                    Boolean(option?.Id && value?.Id && option.Id === value.Id)
                   }
                   renderOption={(props, option) => {
                     const { key: _KEY, ...optionProps } = props;
@@ -526,7 +605,8 @@ const StatusOverview = () => {
                     <TextField
                       {...params}
                       label="Package"
-                      helperText="Filter artifacts."
+                      placeholder="Select package"
+                      helperText="Select a package first."
                     />
                   )}
                 />
@@ -538,15 +618,14 @@ const StatusOverview = () => {
                   options={artifactOptions}
                   value={selectedArtifact}
                   onChange={(_, value) => setSelectedArtifact(value || "All")}
-                  onOpen={() => setArtifactMenuOpened(true)}
-                  disabled={artifactsLoading}
+                  disabled={!selectedPackage?.Id || artifactsLoading}
                   renderInput={(params) => (
                     <TextField
                       {...params}
                       label="Artifact"
                       helperText={
-                        selectedPackage === "All" && !artifactMenuOpened
-                          ? "Open the list to load all tenant artifacts."
+                        !selectedPackage?.Id
+                          ? "Select package first."
                           : "Filter by artifact name."
                       }
                       slotProps={{
@@ -613,7 +692,7 @@ const StatusOverview = () => {
 
               {error && <Alert severity="error">{error}</Alert>}
               {feedback && (
-                <Alert severity={feedbackType || (feedback === "Triggered." ? "success" : "warning")}>
+                <Alert severity={feedbackType || (feedback === "Completed." ? "success" : "warning")}>
                   {feedback}
                 </Alert>
               )}
@@ -629,7 +708,7 @@ const StatusOverview = () => {
                   variant="contained"
                   startIcon={<SendRoundedIcon />}
                   onClick={triggerIflow}
-                  disabled={loading || artifactsLoading}
+                  disabled={loading || artifactsLoading || !selectedPackage?.Id}
                   sx={{ borderRadius: 2, minWidth: 132 }}
                 >
                   {loading ? "Sending..." : "Trigger"}
@@ -638,7 +717,7 @@ const StatusOverview = () => {
                   variant="outlined"
                   startIcon={<RefreshRoundedIcon />}
                   onClick={() => {
-                    setSelectedPackage("All");
+                    setSelectedPackage(null);
                     setSelectedArtifact("All");
                     setStatus("All");
                     setTimeRange("Last Day");
@@ -649,7 +728,9 @@ const StatusOverview = () => {
                     setError("");
                     setReports([]);
                     setSelectedPayloadRow(null);
+                    setPayloadViewMode("raw");
                     setHasTriggeredFetch(false);
+                    setCurrentPage(1);
                   }}
                   sx={{ borderRadius: 2, minWidth: 132 }}
                 >
@@ -699,7 +780,7 @@ const StatusOverview = () => {
                     variant="outlined"
                     startIcon={<RefreshRoundedIcon />}
                     onClick={loadReports}
-                    disabled={reportsLoading || !hasTriggeredFetch}
+                    disabled={reportsLoading}
                     sx={{ borderRadius: 2, alignSelf: "flex-start" }}
                   >
                     {reportsLoading ? "Loading..." : "Refresh"}
@@ -835,16 +916,16 @@ const StatusOverview = () => {
                           <CircularProgress size={22} />
                         </TableCell>
                       </TableRow>
-                    ) : reports.length === 0 ? (
+                    ) : filteredReports.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={9} align="center">
                           {hasTriggeredFetch
-                            ? "No MLP ID records fetched."
+                            ? "No records found for the selected filters."
                             : "Trigger the iFlow first to fetch data."}
                         </TableCell>
                       </TableRow>
                     ) : (
-                      reports.map((row, index) => (
+                      paginatedReports.map((row, index) => (
                         <TableRow
                           key={row.id}
                           hover
@@ -899,7 +980,10 @@ const StatusOverview = () => {
                               <IconButton
                                 size="small"
                                 aria-label={`view ${row.payloadFileName}`}
-                                onClick={() => setSelectedPayloadRow(row)}
+                                onClick={() => {
+                                  setSelectedPayloadRow(row);
+                                  setPayloadViewMode("raw");
+                                }}
                               >
                                 <VisibilityRoundedIcon fontSize="small" />
                               </IconButton>
@@ -919,6 +1003,45 @@ const StatusOverview = () => {
                   </TableBody>
                 </Table>
               </TableContainer>
+
+              {filteredReports.length > 0 && (
+                <Stack
+                  direction={{ xs: "column", sm: "row" }}
+                  justifyContent="space-between"
+                  alignItems={{ xs: "flex-start", sm: "center" }}
+                  spacing={1.5}
+                >
+                  <Typography variant="body2" color="text.secondary">
+                    Showing {(currentPage - 1) * ROWS_PER_PAGE + 1}-
+                    {Math.min(currentPage * ROWS_PER_PAGE, filteredReports.length)} of {filteredReports.length}
+                  </Typography>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Button
+                      variant="outlined"
+                      onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
+                      disabled={currentPage === 1}
+                    >
+                      Previous
+                    </Button>
+                    <Pagination
+                      count={pageCount}
+                      page={currentPage}
+                      onChange={(_, page) => setCurrentPage(page)}
+                      color="primary"
+                      size="small"
+                      siblingCount={0}
+                      boundaryCount={1}
+                    />
+                    <Button
+                      variant="outlined"
+                      onClick={() => setCurrentPage((page) => Math.min(page + 1, pageCount))}
+                      disabled={currentPage === pageCount}
+                    >
+                      Next
+                    </Button>
+                  </Stack>
+                </Stack>
+              )}
             </Stack>
           </Paper>
         </Stack>
@@ -936,6 +1059,9 @@ const StatusOverview = () => {
             <Typography variant="body2" color="text.secondary">
               File: {selectedPayloadRow?.payloadFileName || "-"}
             </Typography>
+            {payloadViewMode === "beautified" && !beautifiedPayload && (
+              <Alert severity="info">Beautify XML is available only for valid XML payloads.</Alert>
+            )}
             <Box
               component="pre"
               sx={{
@@ -952,11 +1078,18 @@ const StatusOverview = () => {
                 wordBreak: "break-word"
               }}
             >
-              {selectedPayloadRow?.decodedPayload || "No payload available."}
+              {payloadContent}
             </Box>
           </Stack>
         </DialogContent>
         <DialogActions>
+          <Button
+            onClick={() =>
+              setPayloadViewMode((mode) => (mode === "beautified" ? "raw" : "beautified"))
+            }
+          >
+            {payloadViewMode === "beautified" ? "Show Raw" : "Beautify XML"}
+          </Button>
           <Button onClick={() => setSelectedPayloadRow(null)}>Close</Button>
         </DialogActions>
       </Dialog>
