@@ -33,13 +33,13 @@
 .landing-title{
   margin:0;
   font-size:28px;
-  font-weight:800;
+  font-weight:300;
   color:#1e293b;
-  margin-bottom:40px;
 }
 
 
 .login-btn{
+  margin-top: 50px;
   width:100%;
   padding:15px;
   border-radius:40px;

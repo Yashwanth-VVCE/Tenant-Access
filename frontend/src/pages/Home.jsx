@@ -21,16 +21,7 @@ function Home() {
             alt="Icon"
             className="landing-logo"
           /> */}
-          <h5
-            style={{
-              margin: 0,
-              fontSize: "24px",
-              fontWeight: 400,
-              color: "#475569",
-              letterSpacing: "0.1px",
-              fontFamily: "poppins, sans-serif"
-            }}
-          >
+          <h5 className="landing-title">
             Welcome to
           </h5>
           <h2 className="landing-title">

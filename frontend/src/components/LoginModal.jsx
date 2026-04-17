@@ -91,18 +91,30 @@ const LoginModal = ({ closeModal }) => {
           {error && <Alert severity="error">{error}</Alert>}
           <Box sx={{ pt: 1 }} />
           <TextField
-            label="Username"
+            fullWidth
+            placeholder="Username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             autoFocus
+            slotProps={{
+              input: {
+                sx: {
+                  fontSize: 15
+                }
+              }
+            }}
           />
           <TextField
-            label="Password"
+            fullWidth
+            placeholder="Password"
             type={showPassword ? "text" : "password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             slotProps={{
               input: {
+                sx: {
+                  fontSize: 15
+                },
                 endAdornment: (
                   <InputAdornment position="end">
                     <IconButton
@@ -117,7 +129,12 @@ const LoginModal = ({ closeModal }) => {
             }}
           />
           <Stack direction="row" spacing={1.5} justifyContent="center">
-            <Button type="submit" variant="contained">
+            <Button
+              type="submit"
+              variant="contained"
+              fullWidth
+              sx={{ height: 46, fontSize: 15, fontWeight: 600, borderRadius: 2.5 }}
+            >
               Submit
             </Button>
           </Stack>

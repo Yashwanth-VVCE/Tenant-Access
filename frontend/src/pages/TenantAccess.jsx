@@ -149,12 +149,15 @@ const TenantAccess = () => {
             </Stack>
 
             <TextField
-              label="Client ID"
+              placeholder="Client ID"
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               fullWidth
               required
               InputProps={{
+                sx: {
+                  fontSize: 15
+                },
                 startAdornment: (
                   <InputAdornment position="start">
                     <VpnKeyRoundedIcon />
@@ -164,13 +167,16 @@ const TenantAccess = () => {
             />
 
             <TextField
-              label="Client Secret"
+              placeholder="Client Secret"
               type="password"
               value={clientSecret}
               onChange={(e) => setClientSecret(e.target.value)}
               fullWidth
               required
               InputProps={{
+                sx: {
+                  fontSize: 15
+                },
                 startAdornment: (
                   <InputAdornment position="start">
                     <KeyRoundedIcon />
@@ -180,12 +186,15 @@ const TenantAccess = () => {
             />
 
             <TextField
-              label="Token URL"
+              placeholder="Token URL"
               value={tokenUrl}
               onChange={(e) => setTokenUrl(e.target.value)}
               fullWidth
               required
               InputProps={{
+                sx: {
+                  fontSize: 15
+                },
                 startAdornment: (
                   <InputAdornment position="start">
                     <CableRoundedIcon />
@@ -195,12 +204,15 @@ const TenantAccess = () => {
             />
 
             <TextField
-              label="Base URL"
+              placeholder="Base URL"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               fullWidth
               required
               InputProps={{
+                sx: {
+                  fontSize: 15
+                },
                 startAdornment: (
                   <InputAdornment position="start">
                     <HubRoundedIcon />

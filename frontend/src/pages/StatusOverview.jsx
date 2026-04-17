@@ -3,6 +3,7 @@ import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import SendRoundedIcon from "@mui/icons-material/SendRounded";
 import VisibilityRoundedIcon from "@mui/icons-material/VisibilityRounded";
+import { js_beautify } from "js-beautify";
 import {
   Alert,
   Autocomplete,
@@ -16,6 +17,7 @@ import {
   DialogTitle,
   InputAdornment,
   IconButton,
+  MenuItem,
   Paper,
   Pagination,
   Stack,
@@ -28,6 +30,7 @@ import {
   TextField,
   Typography
 } from "@mui/material";
+import xmlFormatter from "xml-formatter";
 import TopBar from "../components/TopBar";
 import { API_BASE_URL } from "../config";
 
@@ -102,44 +105,47 @@ const getRangeForTime = (timeRange, customFromDate, customToDate) => {
   }
 };
 
-const ROWS_PER_PAGE = 25;
+const DEFAULT_ROWS_PER_PAGE = 20;
+const rowsPerPageOptions = [10, 20, 30, 40, 50];
 
-const beautifyXml = (xmlText) => {
-  const raw = typeof xmlText === "string" ? xmlText.trim() : "";
+const getBeautifiedPayload = (payloadText) => {
+  const raw = typeof payloadText === "string" ? payloadText.trim() : "";
 
   if (!raw) {
-    return "";
+    return { type: "raw", content: "" };
   }
 
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(raw, "application/xml");
-  const parserError = xmlDoc.querySelector("parsererror");
-
-  if (parserError) {
-    return null;
+  if (raw.startsWith("<")) {
+    try {
+      return {
+        type: "xml",
+        content: xmlFormatter(raw, {
+          indentation: "  ",
+          collapseContent: true,
+          lineSeparator: "\n"
+        })
+      };
+    } catch {
+      return { type: "raw", content: raw };
+    }
   }
 
-  const serialized = new XMLSerializer().serializeToString(xmlDoc);
-  const tokens = serialized.replace(/(>)(<)(\/*)/g, "$1\n$2$3").split("\n");
-  let indentLevel = 0;
+  if (raw.startsWith("{") || raw.startsWith("[")) {
+    try {
+      const parsedJson = JSON.parse(raw);
+      return {
+        type: "json",
+        content: js_beautify(JSON.stringify(parsedJson), {
+          indent_size: 2,
+          preserve_newlines: true
+        })
+      };
+    } catch {
+      return { type: "raw", content: raw };
+    }
+  }
 
-  return tokens
-    .map((token) => token.trim())
-    .filter(Boolean)
-    .map((token) => {
-      if (token.match(/^<\//)) {
-        indentLevel = Math.max(indentLevel - 1, 0);
-      }
-
-      const line = `${"  ".repeat(indentLevel)}${token}`;
-
-      if (token.match(/^<[^!?/][^>]*[^/]>/)) {
-        indentLevel += 1;
-      }
-
-      return line;
-    })
-    .join("\n");
+  return { type: "raw", content: raw };
 };
 
 const StatusOverview = () => {
@@ -181,6 +187,7 @@ const StatusOverview = () => {
   const [resolvedBaseUrl, setResolvedBaseUrl] = useState(baseUrl || "");
   const [hasTriggeredFetch, setHasTriggeredFetch] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(DEFAULT_ROWS_PER_PAGE);
   const artifactRequestIdRef = useRef(0);
   const artifactCacheRef = useRef(new Map());
 
@@ -535,6 +542,12 @@ const StatusOverview = () => {
 
   const filteredReports = useMemo(() => {
     return reports.filter((report) => {
+      const hasValidMplId = Boolean(String(report.mplId || "").trim());
+
+      if (!hasValidMplId) {
+        return false;
+      }
+
       const matchesArtifact =
         selectedArtifact === "All" || !selectedArtifact || report.iflowName === selectedArtifact;
       const matchesStatus = status === "All" || report.status === status;
@@ -543,25 +556,25 @@ const StatusOverview = () => {
     });
   }, [reports, selectedArtifact, status]);
 
-  const pageCount = Math.max(1, Math.ceil(filteredReports.length / ROWS_PER_PAGE));
+  const pageCount = Math.max(1, Math.ceil(filteredReports.length / rowsPerPage));
 
   const paginatedReports = useMemo(() => {
-    const startIndex = (currentPage - 1) * ROWS_PER_PAGE;
-    return filteredReports.slice(startIndex, startIndex + ROWS_PER_PAGE);
-  }, [filteredReports, currentPage]);
+    const startIndex = (currentPage - 1) * rowsPerPage;
+    return filteredReports.slice(startIndex, startIndex + rowsPerPage);
+  }, [filteredReports, currentPage, rowsPerPage]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedArtifact, status, reports]);
+  }, [selectedArtifact, status, reports, rowsPerPage]);
 
   const beautifiedPayload = useMemo(
-    () => beautifyXml(selectedPayloadRow?.decodedPayload || ""),
+    () => getBeautifiedPayload(selectedPayloadRow?.decodedPayload || ""),
     [selectedPayloadRow]
   );
 
   const payloadContent =
-    payloadViewMode === "beautified" && beautifiedPayload
-      ? beautifiedPayload
+    payloadViewMode === "beautified" && beautifiedPayload.type !== "raw"
+      ? beautifiedPayload.content
       : selectedPayloadRow?.decodedPayload || "No payload available.";
 
   return (
@@ -575,8 +588,9 @@ const StatusOverview = () => {
               p: { xs: 2.5, md: 3 },
               borderRadius: 2,
               border: "1px solid rgba(15, 23, 42, 0.08)",
+              color:"white",
               background:
-                "rgba(255, 255, 255, 0.62) 100%"
+                "rgba(13, 129, 182, 0.8) 100%"
             }}
           >
             <Typography variant="h5">Status Overview</Typography>
@@ -754,6 +768,7 @@ const StatusOverview = () => {
                     setPayloadViewMode("raw");
                     setHasTriggeredFetch(false);
                     setCurrentPage(1);
+                    setRowsPerPage(DEFAULT_ROWS_PER_PAGE);
                   }}
                   sx={{ borderRadius: 2, minWidth: 132 }}
                 >
@@ -1034,10 +1049,30 @@ const StatusOverview = () => {
                   alignItems={{ xs: "flex-start", sm: "center" }}
                   spacing={1.5}
                 >
-                  <Typography variant="body2" color="text.secondary">
-                    Showing {(currentPage - 1) * ROWS_PER_PAGE + 1}-
-                    {Math.min(currentPage * ROWS_PER_PAGE, filteredReports.length)} of {filteredReports.length}
-                  </Typography>
+                  <Stack
+                    direction={{ xs: "column", sm: "row" }}
+                    spacing={1.5}
+                    alignItems={{ xs: "flex-start", sm: "center" }}
+                  >
+                    <Typography variant="body2" color="text.secondary">
+                      Showing {(currentPage - 1) * rowsPerPage + 1}-
+                      {Math.min(currentPage * rowsPerPage, filteredReports.length)} of {filteredReports.length}
+                    </Typography>
+                    <TextField
+                      select
+                      size="small"
+                      label="select rows/page"
+                      value={rowsPerPage}
+                      onChange={(event) => setRowsPerPage(Number(event.target.value))}
+                      sx={{ minWidth: 140 }}
+                    >
+                      {rowsPerPageOptions.map((option) => (
+                        <MenuItem key={option} value={option}>
+                          {option}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                  </Stack>
                   <Stack direction="row" spacing={1} alignItems="center">
                     <Pagination
                       count={pageCount}
@@ -1068,8 +1103,10 @@ const StatusOverview = () => {
             <Typography variant="body2" color="text.secondary">
               File: {selectedPayloadRow?.payloadFileName || "-"}
             </Typography>
-            {payloadViewMode === "beautified" && !beautifiedPayload && (
-              <Alert severity="info">Beautify XML is available only for valid XML payloads.</Alert>
+            {payloadViewMode === "beautified" && beautifiedPayload.type === "raw" && (
+              <Alert severity="info">
+                Beautify is available only for valid XML or JSON payloads.
+              </Alert>
             )}
             <Box
               component="pre"
@@ -1096,8 +1133,13 @@ const StatusOverview = () => {
             onClick={() =>
               setPayloadViewMode((mode) => (mode === "beautified" ? "raw" : "beautified"))
             }
+            disabled={beautifiedPayload.type === "raw"}
           >
-            {payloadViewMode === "beautified" ? "Show Raw" : "Beautify XML"}
+            {payloadViewMode === "beautified"
+              ? "Show Raw"
+              : beautifiedPayload.type === "json"
+                ? "Beautify JSON"
+                : "Beautify XML"}
           </Button>
           <Button onClick={() => setSelectedPayloadRow(null)}>Close</Button>
         </DialogActions>
