@@ -182,6 +182,7 @@ const StatusOverview = () => {
   const [hasTriggeredFetch, setHasTriggeredFetch] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const artifactRequestIdRef = useRef(0);
+  const artifactCacheRef = useRef(new Map());
 
   const loadReports = async () => {
     setReportsLoading(true);
@@ -234,6 +235,23 @@ const StatusOverview = () => {
         return;
       }
 
+      const cacheKey = `${resolvedBaseUrl || baseUrl || ""}::${selectedPackage.Id}`;
+      const cachedArtifacts = artifactCacheRef.current.get(cacheKey);
+
+      if (cachedArtifacts) {
+        if (artifactRequestIdRef.current === requestId) {
+          setArtifacts(cachedArtifacts);
+          setSelectedArtifact((currentArtifact) =>
+            currentArtifact === "All" || cachedArtifacts.some((artifact) => artifact.Name === currentArtifact)
+              ? currentArtifact
+              : "All"
+          );
+          setArtifactsLoading(false);
+          setError("");
+        }
+        return;
+      }
+
       setArtifactsLoading(true);
       setError("");
 
@@ -261,6 +279,7 @@ const StatusOverview = () => {
         const nextArtifacts = Array.from(
           new Map((data.artifacts || []).map((artifact) => [artifact.Name, artifact])).values()
         );
+        artifactCacheRef.current.set(cacheKey, nextArtifacts);
         setArtifacts(nextArtifacts);
         setSelectedArtifact((currentArtifact) =>
           currentArtifact === "All" || nextArtifacts.some((artifact) => artifact.Name === currentArtifact)
@@ -294,6 +313,10 @@ const StatusOverview = () => {
       controller.abort();
     };
   }, [token, baseUrl, selectedPackage]);
+
+  useEffect(() => {
+    artifactCacheRef.current.clear();
+  }, [token, baseUrl]);
 
   const packageOptions = useMemo(() => {
     const uniquePackages = Array.from(
@@ -1016,13 +1039,6 @@ const StatusOverview = () => {
                     {Math.min(currentPage * ROWS_PER_PAGE, filteredReports.length)} of {filteredReports.length}
                   </Typography>
                   <Stack direction="row" spacing={1} alignItems="center">
-                    <Button
-                      variant="outlined"
-                      onClick={() => setCurrentPage((page) => Math.max(page - 1, 1))}
-                      disabled={currentPage === 1}
-                    >
-                      Previous
-                    </Button>
                     <Pagination
                       count={pageCount}
                       page={currentPage}
@@ -1032,13 +1048,6 @@ const StatusOverview = () => {
                       siblingCount={0}
                       boundaryCount={1}
                     />
-                    <Button
-                      variant="outlined"
-                      onClick={() => setCurrentPage((page) => Math.min(page + 1, pageCount))}
-                      disabled={currentPage === pageCount}
-                    >
-                      Next
-                    </Button>
                   </Stack>
                 </Stack>
               )}
