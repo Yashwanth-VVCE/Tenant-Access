@@ -319,7 +319,7 @@ const StatusOverview = () => {
     return () => {
       controller.abort();
     };
-  }, [token, baseUrl, selectedPackage]);
+  }, [token, baseUrl, selectedPackage, resolvedBaseUrl]);
 
   useEffect(() => {
     artifactCacheRef.current.clear();
@@ -665,21 +665,18 @@ const StatusOverview = () => {
                           ? "Select package first."
                           : "Filter by artifact name."
                       }
-                      slotProps={{
-                        ...params.slotProps,
-                        input: {
-                          ...params.InputProps,
-                          endAdornment: (
-                            <>
-                              {artifactsLoading ? (
-                                <InputAdornment position="end">
-                                  <CircularProgress size={16} />
-                                </InputAdornment>
-                              ) : null}
-                              {params.InputProps.endAdornment}
-                            </>
-                          )
-                        }
+                      InputProps={{
+                        ...params.InputProps,
+                        endAdornment: (
+                          <>
+                            {artifactsLoading ? (
+                              <InputAdornment position="end">
+                                <CircularProgress size={16} />
+                              </InputAdornment>
+                            ) : null}
+                            {params.InputProps.endAdornment}
+                          </>
+                        )
                       }}
                     />
                   )}
