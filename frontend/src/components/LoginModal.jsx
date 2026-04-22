@@ -21,6 +21,7 @@ import { useNavigate } from "react-router-dom";
 
 const LoginModal = ({ closeModal }) => {
   const navigate = useNavigate();
+  const handleClose = typeof closeModal === "function" ? closeModal : () => navigate("/");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -46,6 +47,7 @@ const LoginModal = ({ closeModal }) => {
       localStorage.removeItem("packages");
       localStorage.removeItem("tenantAccessComplete");
       closeModal();
+      handleClose();
       navigate("/tenant");
       return;
     }
@@ -58,7 +60,7 @@ const LoginModal = ({ closeModal }) => {
       open
       onClose={(_, reason) => {
         if (reason === "backdropClick") return;
-        closeModal();
+        handleClose();
       }}
       disableEscapeKeyDown
       fullWidth
@@ -84,7 +86,7 @@ const LoginModal = ({ closeModal }) => {
         </Stack>
         <IconButton
           aria-label="close"
-          onClick={closeModal}
+          onClick={handleClose}
           sx={{ position: "absolute", right: 12, top: 12, color: "error.main" }}
         >
           <CloseRoundedIcon />
