@@ -46,7 +46,17 @@ if (missingEnv.length > 0) {
   );
 }
 
+const getMissingEnv = (keys) => keys.filter((key) => !process.env[key]);
+
 function getConnection() {
+  const missingHanaEnv = getMissingEnv(["HANA_SERVER", "HANA_USER", "HANA_PASSWORD"]);
+
+  if (missingHanaEnv.length > 0) {
+    throw new Error(
+      `Missing HANA configuration: ${missingHanaEnv.join(", ")}. Add these values to the backend .env file and restart the server.`
+    );
+  }
+
   const conn = hana.createConnection();
 
   conn.connect({
@@ -616,6 +626,397 @@ const parseSapDate = (sapDate) => {
     return match ? parseInt(match[1]) : null;
 };
 
+const unwrapODataResults = (payload) => {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  if (Array.isArray(payload?.d?.results)) {
+    return payload.d.results;
+  }
+
+  if (Array.isArray(payload?.value)) {
+    return payload.value;
+  }
+
+  if (payload?.d && typeof payload.d === "object") {
+    return [payload.d];
+  }
+
+  if (payload && typeof payload === "object") {
+    return [payload];
+  }
+
+  return [];
+};
+
+const firstNonEmpty = (...values) =>
+  values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
+
+const formatSapTimestamp = (value) => {
+  if (!value) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    if (/^\d{10,17}$/.test(value.trim())) {
+      const numericValue = Number(value.trim());
+      if (!Number.isNaN(numericValue)) {
+        return new Date(numericValue).toLocaleString("en-IN", { hour12: false });
+      }
+    }
+
+    const sapDate = parseSapDate(value);
+    if (sapDate) {
+      return new Date(sapDate).toLocaleString("en-IN", { hour12: false });
+    }
+
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) {
+      return new Date(parsed).toLocaleString("en-IN", { hour12: false });
+    }
+
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return new Date(value).toLocaleString("en-IN", { hour12: false });
+  }
+
+  return String(value);
+};
+
+const normalizeKey = (value) => String(value || "").replace(/[\s_\-]/g, "").toLowerCase();
+
+const findNestedValue = (input, aliases, maxDepth = 4) => {
+  const aliasSet = new Set(aliases.map(normalizeKey));
+  const visited = new Set();
+
+  const walk = (value, depth) => {
+    if (value === null || value === undefined || depth > maxDepth) {
+      return undefined;
+    }
+
+    if (typeof value !== "object") {
+      return undefined;
+    }
+
+    if (visited.has(value)) {
+      return undefined;
+    }
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = walk(item, depth + 1);
+        if (found !== undefined && found !== null && String(found).trim() !== "") {
+          return found;
+        }
+      }
+      return undefined;
+    }
+
+    for (const [key, nestedValue] of Object.entries(value)) {
+      if (aliasSet.has(normalizeKey(key))) {
+        if (nestedValue !== undefined && nestedValue !== null && String(nestedValue).trim() !== "") {
+          return nestedValue;
+        }
+      }
+    }
+
+    for (const nestedValue of Object.values(value)) {
+      const found = walk(nestedValue, depth + 1);
+      if (found !== undefined && found !== null && String(found).trim() !== "") {
+        return found;
+      }
+    }
+
+    return undefined;
+  };
+
+  return walk(input, 0);
+};
+
+const findValueInNamedCollection = (input, aliases, maxDepth = 4) => {
+  const aliasSet = new Set(aliases.map(normalizeKey));
+  const visited = new Set();
+
+  const walk = (value, depth) => {
+    if (value === null || value === undefined || depth > maxDepth) {
+      return undefined;
+    }
+
+    if (typeof value !== "object") {
+      return undefined;
+    }
+
+    if (visited.has(value)) {
+      return undefined;
+    }
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item && typeof item === "object") {
+          const keyName = firstNonEmpty(item.Name, item.name, item.Key, item.key, item.Property, item.property);
+          const keyValue = firstNonEmpty(item.Value, item.value, item.Content, item.content);
+
+          if (keyName && aliasSet.has(normalizeKey(keyName)) && keyValue !== undefined && keyValue !== null && String(keyValue).trim() !== "") {
+            return keyValue;
+          }
+        }
+
+        const found = walk(item, depth + 1);
+        if (found !== undefined && found !== null && String(found).trim() !== "") {
+          return found;
+        }
+      }
+      return undefined;
+    }
+
+    for (const nestedValue of Object.values(value)) {
+      const found = walk(nestedValue, depth + 1);
+      if (found !== undefined && found !== null && String(found).trim() !== "") {
+        return found;
+      }
+    }
+
+    return undefined;
+  };
+
+  return walk(input, 0);
+};
+
+const encodeODataKey = (value) => encodeURIComponent(String(value).replace(/'/g, "''"));
+
+const mapQueueRecord = (queue, index) => ({
+  id:
+    firstNonEmpty(
+      queue.Id,
+      queue.Key,
+      queue.Name,
+      queue.QueueName,
+      queue.StoreName,
+      queue.MessageStoreName,
+      `queue-${index + 1}`
+    ),
+  key: firstNonEmpty(
+    queue.Id,
+    queue.Key,
+    queue.QueueName,
+    queue.Name,
+    queue.StoreName,
+    queue.MessageStoreName,
+    `queue-${index + 1}`
+  ),
+  name: firstNonEmpty(
+    queue.Name,
+    queue.QueueName,
+    queue.StoreName,
+    queue.MessageStoreName,
+    queue.Id,
+    `Queue ${index + 1}`
+  ),
+  accessType: firstNonEmpty(queue.AccessType, queue.Access_Mode, queue.Type, ""),
+  entries:
+    Number(
+      firstNonEmpty(
+        queue.NumbOfMsgs,
+        queue.NumberOfMessages,
+        queue.Entries,
+        queue.EntryCount,
+        queue.MessageCount,
+        0
+      )
+    ) || 0
+});
+
+const collectNestedMessageRows = (payload) => {
+  const directRows = unwrapODataResults(payload);
+
+  if (directRows.length > 0) {
+    return directRows;
+  }
+
+  const nestedCandidates = [
+    payload?.d?.Messages,
+    payload?.d?.Entries,
+    payload?.Messages,
+    payload?.Entries
+  ];
+
+  for (const candidate of nestedCandidates) {
+    const rows = unwrapODataResults(candidate);
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+
+  return [];
+};
+
+const queueMessageAliases = {
+  id: ["Id", "id", "MessageId", "messageId", "MessageID", "JMSMessageId", "jmsMessageId", "JMSMessageID"],
+  jmsMessageId: ["JMSMessageId", "jmsMessageId", "JMSMessageID", "JmsMessageId", "JmsMessageID", "JMS_MESSAGE_ID", "JMSMessageIDString", "JMSCorrelationId", "JMSMessageIDValue"],
+  messageId: ["MessageId", "messageId", "MessageID", "MsgId", "MsgID", "MESSAGE_ID", "SAPMessageId", "CorrelationId", "SAP_MessageProcessingLogID"],
+  status: ["Status", "status", "State", "state", "ProcessingStatus", "MESSAGE_STATUS", "DeliveryStatus"],
+  dueAt: ["DueAt", "dueAt", "DueDate", "VisibleAt", "NextVisibleAt", "DUE_AT"],
+  createdAt: ["CreatedAt", "createdAt", "CreatedOn", "CreatedDate", "EnqueueTime", "Timestamp", "timestamp", "CREATED_AT", "Created", "InsertedAt"],
+  retainUntil: ["RetainUntil", "retainUntil", "RetentionEnd", "ExpiresAt", "ExpiryDate", "RETAIN_UNTIL", "ExpirationTime"],
+  retryCount: ["RetryCount", "retryCount", "RedeliveryCount", "DeliveryAttempt", "AttemptCount", "RETRY_COUNT", "Retries"],
+  nextRetryOn: ["NextRetryOn", "nextRetryOn", "NextRetryAt", "NextVisibleAt", "NEXT_RETRY_ON"]
+};
+
+const pickMessageValue = (message, aliases) =>
+  firstNonEmpty(
+    ...aliases.map((alias) => message?.[alias]),
+    findNestedValue(message, aliases),
+    findValueInNamedCollection(message, aliases)
+  );
+
+const mapQueueMessage = (message, index) => ({
+  id: firstNonEmpty(pickMessageValue(message, queueMessageAliases.id), `message-${index + 1}`),
+  jmsMessageId: firstNonEmpty(
+    pickMessageValue(message, queueMessageAliases.jmsMessageId),
+    message?.id && String(message.id).startsWith("ID:") ? message.id : undefined
+  ),
+  messageId: firstNonEmpty(
+    pickMessageValue(message, queueMessageAliases.messageId),
+    pickMessageValue(message, ["MessageGuid", "messageGuid", "MessageUUID", "messageUUID"])
+  ),
+  status: pickMessageValue(message, queueMessageAliases.status),
+  dueAt: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.dueAt)),
+  createdAt: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.createdAt)),
+  retainUntil: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.retainUntil)),
+  retryCount: pickMessageValue(message, queueMessageAliases.retryCount),
+  nextRetryOn: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.nextRetryOn))
+});
+
+const getJmsQueueRecords = async (baseUrl, token) => {
+  const candidates = buildBaseUrlCandidates(baseUrl);
+  let lastError;
+
+  for (const candidate of candidates) {
+    try {
+      const response = await axios.get(`${candidate}/api/v1/Queues`, {
+        headers: tenantHeaders(token),
+        params: {
+          $format: "json",
+          $top: 500
+        },
+        timeout: 30000
+      });
+
+      const rows = unwrapODataResults(response.data);
+      const normalizedQueues = rows
+        .map(mapQueueRecord)
+        .filter((queue) => queue.name)
+        .sort((left, right) => left.name.localeCompare(right.name));
+
+      return Array.from(new Map(normalizedQueues.map((queue) => [queue.name, queue])).values());
+    } catch (error) {
+      lastError = error;
+      console.warn("getJmsQueueRecords failed for", candidate, error.response?.data || error.message);
+    }
+  }
+
+  throw lastError || new Error("Unable to fetch JMS queues.");
+};
+
+const getJmsMessagesForQueue = async (baseUrl, token, queueName, queueKey) => {
+  const candidates = buildBaseUrlCandidates(baseUrl);
+  const queueIdentifiers = Array.from(
+    new Set(
+      [queueName, queueKey]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  );
+  let lastError;
+
+  for (const candidate of candidates) {
+    for (const queueIdentifier of queueIdentifiers) {
+      const encodedQueueKey = encodeODataKey(queueIdentifier);
+      const resourcePaths = [
+        `/api/v1/Queues('${encodedQueueKey}')/Messages`,
+        `/api/v1/Queues('${encodedQueueKey}')?$expand=Messages`,
+        `/api/v1/Queues('${encodedQueueKey}')?$expand=Entries`
+      ];
+
+      for (const resourcePath of resourcePaths) {
+        try {
+          const response = await axios.get(`${candidate}${resourcePath}`, {
+            headers: tenantHeaders(token),
+            params: {
+              $format: "json",
+              $top: 200
+            },
+            timeout: 30000
+          });
+
+          const rows = collectNestedMessageRows(response.data);
+          if (rows.length > 0 || resourcePath.includes("/Messages")) {
+            return rows.map(mapQueueMessage);
+          }
+        } catch (error) {
+          lastError = error;
+
+          console.warn(
+            `getJmsMessagesForQueue failed for ${candidate}${resourcePath}:`,
+            error.response?.data || error.message
+          );
+
+          if (error.response?.status === 404) {
+            continue;
+          }
+        }
+      }
+    }
+  }
+
+  throw lastError || new Error(`Unable to fetch messages for queue ${queueName || queueKey}.`);
+};
+
+app.post("/jms-queues", async (req, res) => {
+  let { token, baseUrl } = req.body || {};
+  baseUrl = cleanUrl(baseUrl);
+
+  if (!token || !baseUrl) {
+    return res.status(400).json({ message: "token and baseUrl are required." });
+  }
+
+  try {
+    const queues = await getJmsQueueRecords(baseUrl, token);
+    return res.json({ queues });
+  } catch (error) {
+    console.error("jms-queues error:", error.response?.data || error.message);
+    return res.status(500).json({
+      message: "Failed to fetch JMS queues.",
+      detail: error.response?.data || error.message
+    });
+  }
+});
+
+app.post("/jms-messages", async (req, res) => {
+  let { token, baseUrl, queueName, queueKey } = req.body || {};
+  baseUrl = cleanUrl(baseUrl);
+
+  if (!token || !baseUrl || (!queueName && !queueKey)) {
+    return res.status(400).json({ message: "token, baseUrl, and queueName or queueKey are required." });
+  }
+
+  try {
+    const messages = await getJmsMessagesForQueue(baseUrl, token, queueName, queueKey);
+    return res.json({ messages });
+  } catch (error) {
+    console.error("jms-messages error:", error.response?.data || error.message);
+    return res.status(500).json({
+      message: "Failed to fetch JMS messages.",
+      detail: error.response?.data || error.message
+    });
+  }
+});
+
 app.post("/getMessages", async (req, res) => {
     let { token, baseUrl, status, artifactName, fromDate, toDate } = req.body;
     baseUrl = cleanUrl(baseUrl);
@@ -714,10 +1115,17 @@ app.post("/trigger-cpi", async (req, res) => {
         return res.status(500).json({ message: "CPI trigger endpoint not configured." });
     }
     try {
+        const missingTriggerEnv = getMissingEnv(["TRIGGER_CLIENT_ID", "TRIGGER_CLIENT_SECRET"]).filter(
+            (key) => !process.env[key] && !process.env[key.replace("TRIGGER_", "IFLOW_")] && !process.env[key.replace("TRIGGER_", "")]
+        );
         const credentials = getTriggerCredentials();
 
         if (!credentials) {
-            return res.status(500).json({ message: "CPI client credentials not configured." });
+            return res.status(500).json({
+                message: missingTriggerEnv.length
+                    ? `CPI client credentials not configured. Missing: ${missingTriggerEnv.join(", ")}`
+                    : "CPI client credentials not configured."
+            });
         }
 
         const response = await axios.post(CPI_TRIGGER_ENDPOINT, req.body, {

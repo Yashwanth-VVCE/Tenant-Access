@@ -41,6 +41,10 @@ const LoginModal = ({ closeModal }) => {
 
     if (validUser) {
       localStorage.setItem("user", JSON.stringify(validUser));
+      localStorage.removeItem("token");
+      localStorage.removeItem("baseUrl");
+      localStorage.removeItem("packages");
+      localStorage.removeItem("tenantAccessComplete");
       closeModal();
       navigate("/tenant");
       return;

@@ -5,6 +5,7 @@ import Login from "./pages/Login";
 import TenantAccess from "./pages/TenantAccess";
 import Unauthorized from "./pages/Unauthorized";
 import StatusOverview from "./pages/StatusOverview";
+import JmsQueues from "./pages/JmsQueues";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 function App() {
@@ -18,6 +19,11 @@ function App() {
                 <Route path="/status" element={
                     <ProtectedRoute>
                         <StatusOverview />
+                    </ProtectedRoute>
+                } />
+                <Route path="/jms-queues" element={
+                    <ProtectedRoute>
+                        <JmsQueues />
                     </ProtectedRoute>
                 } />
             </Routes>
