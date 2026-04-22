@@ -688,6 +688,33 @@ const formatSapTimestamp = (value) => {
 
 const normalizeKey = (value) => String(value || "").replace(/[\s_\-]/g, "").toLowerCase();
 
+const flattenObject = (input, prefix = "", depth = 0, maxDepth = 4) => {
+  if (input === null || input === undefined || depth > maxDepth) {
+    return {};
+  }
+
+  if (typeof input !== "object") {
+    return prefix ? { [prefix]: input } : {};
+  }
+
+  if (Array.isArray(input)) {
+    return input.reduce((acc, item, index) => {
+      const nextPrefix = prefix ? `${prefix}[${index}]` : `[${index}]`;
+      return { ...acc, ...flattenObject(item, nextPrefix, depth + 1, maxDepth) };
+    }, {});
+  }
+
+  return Object.entries(input).reduce((acc, [key, value]) => {
+    const nextPrefix = prefix ? `${prefix}.${key}` : key;
+
+    if (value !== null && typeof value === "object") {
+      return { ...acc, ...flattenObject(value, nextPrefix, depth + 1, maxDepth) };
+    }
+
+    return { ...acc, [nextPrefix]: value };
+  }, {});
+};
+
 const findNestedValue = (input, aliases, maxDepth = 4) => {
   const aliasSet = new Set(aliases.map(normalizeKey));
   const visited = new Set();
@@ -856,15 +883,15 @@ const collectNestedMessageRows = (payload) => {
 };
 
 const queueMessageAliases = {
-  id: ["Id", "id", "MessageId", "messageId", "MessageID", "JMSMessageId", "jmsMessageId", "JMSMessageID"],
-  jmsMessageId: ["JMSMessageId", "jmsMessageId", "JMSMessageID", "JmsMessageId", "JmsMessageID", "JMS_MESSAGE_ID", "JMSMessageIDString", "JMSCorrelationId", "JMSMessageIDValue"],
-  messageId: ["MessageId", "messageId", "MessageID", "MsgId", "MsgID", "MESSAGE_ID", "SAPMessageId", "CorrelationId", "SAP_MessageProcessingLogID"],
-  status: ["Status", "status", "State", "state", "ProcessingStatus", "MESSAGE_STATUS", "DeliveryStatus"],
-  dueAt: ["DueAt", "dueAt", "DueDate", "VisibleAt", "NextVisibleAt", "DUE_AT"],
+  id: ["Id", "id", "Msgid", "MsgId", "MessageId", "messageId", "MessageID", "JMSMessageId", "jmsMessageId", "JMSMessageID"],
+  jmsMessageId: ["Msgid", "MsgId", "JMSMessageId", "jmsMessageId", "JMSMessageID", "JmsMessageId", "JmsMessageID", "JMS_MESSAGE_ID", "JMSMessageIDString", "JMSCorrelationId", "JMSMessageIDValue"],
+  messageId: ["Mplid", "MplId", "MPLID", "SapMplCorrelationId", "MessageId", "messageId", "MessageID", "MsgId", "MsgID", "MESSAGE_ID", "SAPMessageId", "CorrelationId", "SAP_MessageProcessingLogID"],
+  status: ["Failed", "Status", "status", "State", "state", "ProcessingStatus", "MESSAGE_STATUS", "DeliveryStatus"],
+  dueAt: ["OverdueAt", "DueAt", "dueAt", "DueDate", "VisibleAt", "NextVisibleAt", "DUE_AT"],
   createdAt: ["CreatedAt", "createdAt", "CreatedOn", "CreatedDate", "EnqueueTime", "Timestamp", "timestamp", "CREATED_AT", "Created", "InsertedAt"],
-  retainUntil: ["RetainUntil", "retainUntil", "RetentionEnd", "ExpiresAt", "ExpiryDate", "RETAIN_UNTIL", "ExpirationTime"],
+  retainUntil: ["ExpirationDate", "RetainUntil", "retainUntil", "RetentionEnd", "ExpiresAt", "ExpiryDate", "RETAIN_UNTIL", "ExpirationTime"],
   retryCount: ["RetryCount", "retryCount", "RedeliveryCount", "DeliveryAttempt", "AttemptCount", "RETRY_COUNT", "Retries"],
-  nextRetryOn: ["NextRetryOn", "nextRetryOn", "NextRetryAt", "NextVisibleAt", "NEXT_RETRY_ON"]
+  nextRetryOn: ["NextRetry", "NextRetryOn", "nextRetryOn", "NextRetryAt", "NextVisibleAt", "NEXT_RETRY_ON"]
 };
 
 const pickMessageValue = (message, aliases) =>
@@ -876,20 +903,24 @@ const pickMessageValue = (message, aliases) =>
 
 const mapQueueMessage = (message, index) => ({
   id: firstNonEmpty(pickMessageValue(message, queueMessageAliases.id), `message-${index + 1}`),
-  jmsMessageId: firstNonEmpty(
-    pickMessageValue(message, queueMessageAliases.jmsMessageId),
-    message?.id && String(message.id).startsWith("ID:") ? message.id : undefined
-  ),
+  jmsMessageId: firstNonEmpty(pickMessageValue(message, queueMessageAliases.jmsMessageId), message?.id),
   messageId: firstNonEmpty(
     pickMessageValue(message, queueMessageAliases.messageId),
     pickMessageValue(message, ["MessageGuid", "messageGuid", "MessageUUID", "messageUUID"])
   ),
-  status: pickMessageValue(message, queueMessageAliases.status),
+  status:
+    typeof pickMessageValue(message, ["Failed"]) === "boolean"
+      ? (pickMessageValue(message, ["Failed"]) ? "Failed" : "Available")
+      : pickMessageValue(message, queueMessageAliases.status),
   dueAt: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.dueAt)),
   createdAt: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.createdAt)),
   retainUntil: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.retainUntil)),
-  retryCount: pickMessageValue(message, queueMessageAliases.retryCount),
-  nextRetryOn: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.nextRetryOn))
+  retryCount: firstNonEmpty(pickMessageValue(message, queueMessageAliases.retryCount), "0"),
+  nextRetryOn: (() => {
+    const nextRetryValue = pickMessageValue(message, queueMessageAliases.nextRetryOn);
+    return nextRetryValue === "0" || nextRetryValue === 0 ? "" : formatSapTimestamp(nextRetryValue);
+  })(),
+  rawFields: flattenObject(message)
 });
 
 const getJmsQueueRecords = async (baseUrl, token) => {
