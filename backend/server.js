@@ -2,15 +2,13 @@ require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
-const fs = require("fs/promises");
-const os = require("os");
 const path = require("path");
-const { execFile } = require("child_process");
 const ExcelJS = require("exceljs");
 const nodemailer = require("nodemailer");
+const archiver = require("archiver");
 const app = express();
 const hana = require("@sap/hana-client");
-// app.use(cors({ origin: "https://message-monitoring.cfapps.us10-001.hana.ondemand.com" }));
+
 app.use(cors());
 app.use(express.json({ limit: '10mb' })); 
 app.use(express.text({ type: "text/*" }));
@@ -218,71 +216,48 @@ const createReportsExcelBuffer = async (reports) => {
   return workbook.xlsx.writeBuffer();
 };
 
-const execFileAsync = (file, args) =>
-  new Promise((resolve, reject) => {
-    execFile(file, args, (error, stdout, stderr) => {
-      if (error) {
-        reject(stderr || error);
-        return;
-      }
-      resolve(stdout);
-    });
-  });
-
 const createReportsZip = async (reports) => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "tenant-access-"));
-  const payloadDir = path.join(tempRoot, "payloads");
   const zipBaseName = sanitizeFileName(
     `${reports[0]?.iflowName || "iFlow"}_Payload_files`,
     "iFlow_Payload_files"
   );
-  const zipPath = path.join(tempRoot, `${zipBaseName}.zip`);
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  const chunks = [];
+  const usedFileNames = new Set();
 
-  try {
-    await fs.mkdir(payloadDir, { recursive: true });
-    const usedFileNames = new Set();
+  const zipBufferPromise = new Promise((resolve, reject) => {
+    archive.on("data", (chunk) => chunks.push(chunk));
+    archive.on("warning", reject);
+    archive.on("error", reject);
+    archive.on("end", () => resolve(Buffer.concat(chunks)));
+  });
 
-    await Promise.all(
-      reports.map((report, index) => {
-        const baseName = sanitizeFileName(
-          report.payloadFileName,
-          `payload-${index + 1}.${report.payloadFileType || "txt"}`
-        );
-
-        let uniqueName = baseName;
-        let suffix = 1;
-
-        while (usedFileNames.has(uniqueName.toLowerCase())) {
-          const extension = path.extname(baseName);
-          const fileStem = extension ? baseName.slice(0, -extension.length) : baseName;
-          uniqueName = `${fileStem}_${suffix}${extension}`;
-          suffix += 1;
-        }
-
-        usedFileNames.add(uniqueName.toLowerCase());
-
-        return fs.writeFile(
-          path.join(payloadDir, uniqueName),
-          report.decodedPayload || "",
-          "utf8"
-        );
-      })
+  reports.forEach((report, index) => {
+    const baseName = sanitizeFileName(
+      report.payloadFileName,
+      `payload-${index + 1}.${report.payloadFileType || "txt"}`
     );
 
-    await execFileAsync("powershell.exe", [
-      "-NoProfile",
-      "-Command",
-      `Compress-Archive -Path '${payloadDir}\\*' -DestinationPath '${zipPath}' -Force`
-    ]);
+    let uniqueName = baseName;
+    let suffix = 1;
 
-    const zipBuffer = await fs.readFile(zipPath);
-    return {
-      zipBuffer,
-      zipFileName: `${zipBaseName}.zip`
-    };
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
+    while (usedFileNames.has(uniqueName.toLowerCase())) {
+      const extension = path.extname(baseName);
+      const fileStem = extension ? baseName.slice(0, -extension.length) : baseName;
+      uniqueName = `${fileStem}_${suffix}${extension}`;
+      suffix += 1;
+    }
+
+    usedFileNames.add(uniqueName.toLowerCase());
+    archive.append(report.decodedPayload || "", { name: uniqueName });
+  });
+
+  await archive.finalize();
+
+  return {
+    zipBuffer: await zipBufferPromise,
+    zipFileName: `${zipBaseName}.zip`
+  };
 };
 
 const createMailTransport = () => {
