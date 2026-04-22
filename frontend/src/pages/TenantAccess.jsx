@@ -15,10 +15,25 @@ import CableRoundedIcon from "@mui/icons-material/CableRounded";
 import HubRoundedIcon from "@mui/icons-material/HubRounded";
 import VpnKeyRoundedIcon from "@mui/icons-material/VpnKeyRounded";
 import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
+import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
+import FormatListBulletedRoundedIcon from "@mui/icons-material/FormatListBulletedRounded";
+import MonitorHeartRoundedIcon from "@mui/icons-material/MonitorHeartRounded";
 
 import { useNavigate } from "react-router-dom";
 import TopBar from "../components/TopBar";
 import { API_BASE_URL } from "../config";
+
+const hasStoredTenantSession = () => {
+  try {
+    return Boolean(
+      localStorage.getItem("tenantAccessComplete") === "true" &&
+      localStorage.getItem("token") &&
+      localStorage.getItem("baseUrl")
+    );
+  } catch {
+    return false;
+  }
+};
 
 const TenantAccess = () => {
   const [clientId, setClientId] = useState("");
@@ -28,6 +43,7 @@ const TenantAccess = () => {
   const [message, setMessage] = useState("");
   const [isError, setIsError] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isConnected, setIsConnected] = useState(hasStoredTenantSession);
 
   const navigate = useNavigate();
 
@@ -62,8 +78,8 @@ const TenantAccess = () => {
         localStorage.setItem("token", result.token);
         localStorage.setItem("baseUrl", result.baseUrl || cleanBase);
         localStorage.setItem("packages", JSON.stringify(result.packages || []));
-
-        setTimeout(() => navigate("/status"), 1000);
+        localStorage.setItem("tenantAccessComplete", "true");
+        setIsConnected(true);
       } else {
         setIsError(true);
         setMessage(result.message || "Connection Failed");
@@ -81,8 +97,7 @@ const TenantAccess = () => {
     <Box
       sx={{
         minHeight: "100vh",
-        background:
-          "linear-gradient(150deg, #ffffff 0%, #ffffff 45%, #ffffff 100%)",
+        background: "#f6f8fb",
         display: "flex",
         flexDirection: "column"
       }}
@@ -113,7 +128,7 @@ const TenantAccess = () => {
       )}
 
       <Container
-        maxWidth="sm"
+        maxWidth={isConnected ? "md" : "sm"}
         sx={{
           flex: 1,
           display: "flex",
@@ -124,121 +139,187 @@ const TenantAccess = () => {
           py: { xs: 4, md: 6 }
         }}
       >
-        <Paper
-          elevation={8}
-          sx={{
-            width: "100%",
-            p: { xs: 3, md: 4 },
-            borderRadius: 3,
-            backdropFilter: "blur(10px)",
-            background: "linear-gradient(150deg, rgba(112, 151, 156, 0.48) 0%, rgba(100, 152, 231, 0.44) 100%)",
-            border: "1px solid rgba(148, 163, 184, 0.35)",
-            boxShadow: "0 28px 70px rgba(15, 23, 42, 0.18)"
-          }}
-        >
-          <Stack spacing={2} component="form" onSubmit={handleSubmit}>
+        {isConnected ? (
+          <Paper
+            elevation={0}
+            sx={{
+              width: "100%",
+              p: { xs: 3, md: 4 },
+              borderRadius: 3,
+              background: "#f8fafc",
+              border: "1px solid #d7dee8",
+              boxShadow: "0 24px 60px rgba(15, 23, 42, 0.08)"
+            }}
+          >
+            <Stack spacing={3} sx={{ width: "100%" }}>
+              <Stack spacing={1} alignItems="center">
+                <Typography variant="h4" fontWeight="bold">
+                  Tenant Connected
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Choose where you want to continue.
+                </Typography>
+              </Stack>
 
-            <Stack spacing={2} alignItems="center">
-              <Typography variant="h4" fontWeight="bold">
-                Access Tenant
-              </Typography>
-
-              <Typography variant="body2" color="text.secondary">
-                Connect your SAP tenant using Client Credentials
-              </Typography>
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={2.5}>
+                <Button
+                  fullWidth
+                  variant="contained"
+                  size="large"
+                  startIcon={<MonitorHeartRoundedIcon />}
+                  endIcon={<ArrowForwardRoundedIcon />}
+                  onClick={() => navigate("/status")}
+                  sx={{
+                    minHeight: 82,
+                    justifyContent: "space-between",
+                    px: 3,
+                    borderRadius: 2,
+                    background: "#0b84d6",
+                    fontSize: 16,
+                    fontWeight: 800
+                  }}
+                >
+                  Message Monitoring Overview
+                </Button>
+                <Button
+                  fullWidth
+                  variant="contained"
+                  size="large"
+                  startIcon={<FormatListBulletedRoundedIcon />}
+                  endIcon={<ArrowForwardRoundedIcon />}
+                  onClick={() => navigate("/jms-queues")}
+                  sx={{
+                    minHeight: 82,
+                    justifyContent: "space-between",
+                    px: 3,
+                    borderRadius: 2,
+                    background: "#0b84d6",
+                    fontSize: 16,
+                    fontWeight: 800
+                  }}
+                >
+                  JMS Queues
+                </Button>
+              </Stack>
             </Stack>
+          </Paper>
+        ) : (
+          <Paper
+            elevation={8}
+            sx={{
+              width: "100%",
+              p: { xs: 3, md: 4 },
+              borderRadius: 3,
+              backdropFilter: "blur(10px)",
+              background: "linear-gradient(150deg, rgba(112, 151, 156, 0.48) 0%, rgba(100, 152, 231, 0.44) 100%)",
+              border: "1px solid rgba(148, 163, 184, 0.35)",
+              boxShadow: "0 28px 70px rgba(15, 23, 42, 0.18)"
+            }}
+          >
+            <Stack spacing={2} component="form" onSubmit={handleSubmit}>
 
-            <TextField
-              placeholder="Client ID"
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              fullWidth
-              required
-              InputProps={{
-                sx: {
-                  fontSize: 15
-                },
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <VpnKeyRoundedIcon />
-                  </InputAdornment>
-                )
-              }}
-            />
+              <Stack spacing={2} alignItems="center">
+                <Typography variant="h4" fontWeight="bold">
+                  Access Tenant
+                </Typography>
 
-            <TextField
-              placeholder="Client Secret"
-              type="password"
-              value={clientSecret}
-              onChange={(e) => setClientSecret(e.target.value)}
-              fullWidth
-              required
-              InputProps={{
-                sx: {
-                  fontSize: 15
-                },
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <KeyRoundedIcon />
-                  </InputAdornment>
-                )
-              }}
-            />
+                <Typography variant="body2" color="text.secondary">
+                  Connect your SAP tenant using Client Credentials
+                </Typography>
+              </Stack>
 
-            <TextField
-              placeholder="Token URL"
-              value={tokenUrl}
-              onChange={(e) => setTokenUrl(e.target.value)}
-              fullWidth
-              required
-              InputProps={{
-                sx: {
-                  fontSize: 15
-                },
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <CableRoundedIcon />
-                  </InputAdornment>
-                )
-              }}
-            />
+              <TextField
+                placeholder="Client ID"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                fullWidth
+                required
+                InputProps={{
+                  sx: {
+                    fontSize: 15
+                  },
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <VpnKeyRoundedIcon />
+                    </InputAdornment>
+                  )
+                }}
+              />
 
-            <TextField
-              placeholder="Base URL"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              fullWidth
-              required
-              InputProps={{
-                sx: {
-                  fontSize: 15
-                },
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <HubRoundedIcon />
-                  </InputAdornment>
-                )
-              }}
-            />
+              <TextField
+                placeholder="Client Secret"
+                type="password"
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                fullWidth
+                required
+                InputProps={{
+                  sx: {
+                    fontSize: 15
+                  },
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <KeyRoundedIcon />
+                    </InputAdornment>
+                  )
+                }}
+              />
 
-            <Button
-              type="submit"
-              variant="contained"
-              size="large"
-              disabled={isLoading}
-              sx={{
-                height: 50,
-                fontWeight: "bold",
-                borderRadius: 3,
-                background:
-                  "linear-gradient(90deg,#0b84d6,#4cc3ff)"
-              }}
-            >
-              {isLoading ? "Connecting..." : "Connect"}
-            </Button>
+              <TextField
+                placeholder="Token URL"
+                value={tokenUrl}
+                onChange={(e) => setTokenUrl(e.target.value)}
+                fullWidth
+                required
+                InputProps={{
+                  sx: {
+                    fontSize: 15
+                  },
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <CableRoundedIcon />
+                    </InputAdornment>
+                  )
+                }}
+              />
 
-          </Stack>
-        </Paper>
+              <TextField
+                placeholder="Base URL"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                fullWidth
+                required
+                InputProps={{
+                  sx: {
+                    fontSize: 15
+                  },
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <HubRoundedIcon />
+                    </InputAdornment>
+                  )
+                }}
+              />
+
+              <Button
+                type="submit"
+                variant="contained"
+                size="large"
+                disabled={isLoading}
+                sx={{
+                  height: 50,
+                  fontWeight: "bold",
+                  borderRadius: 3,
+                  background:
+                    "linear-gradient(90deg,#0b84d6,#4cc3ff)"
+                }}
+              >
+                {isLoading ? "Connecting..." : "Connect"}
+              </Button>
+
+            </Stack>
+          </Paper>
+        )}
       </Container>
     </Box>
   );

@@ -1,4 +1,5 @@
 import React from "react";
+import ArrowBackRoundedIcon from "@mui/icons-material/ArrowBackRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import {
   AppBar,
@@ -14,12 +15,15 @@ import { useLocation, useNavigate } from "react-router-dom";
 const TopBar = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const showBackButton =
+    location.pathname === "/status" || location.pathname === "/jms-queues";
 
   const handleLogout = () => {
     localStorage.removeItem("user");
     localStorage.removeItem("token");
     localStorage.removeItem("baseUrl");
     localStorage.removeItem("packages");
+    localStorage.removeItem("tenantAccessComplete");
     navigate("/");
   };
 
@@ -56,14 +60,15 @@ const TopBar = () => {
             />
           </Stack>
           <Stack direction="row" spacing={1.5} alignItems="center">
-            {location.pathname !== "/status" && location.pathname !== "/tenant" && (
+            {showBackButton && (
               <Button
                 variant="outlined"
                 color="primary"
-                onClick={() => navigate("/status")}
+                startIcon={<ArrowBackRoundedIcon />}
+                onClick={() => navigate("/tenant")}
                 sx={{ borderRadius: 12 }}
               >
-                Status
+                Back
               </Button>
             )}
             <Button

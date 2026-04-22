@@ -593,7 +593,14 @@ const StatusOverview = () => {
                 "rgba(13, 129, 182, 0.8) 100%"
             }}
           >
-            <Typography variant="h5">Status Overview</Typography>
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              justifyContent="space-between"
+              alignItems={{ xs: "flex-start", sm: "center" }}
+              spacing={1.5}
+            >
+              <Typography variant="h5">Status Overview</Typography>
+            </Stack>
           </Paper>
 
           <Paper
