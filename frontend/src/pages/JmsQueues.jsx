@@ -1,36 +1,46 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
-import DnsRoundedIcon from "@mui/icons-material/DnsRounded";
+import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
+import DriveFileMoveOutlinedIcon from "@mui/icons-material/DriveFileMoveOutlined";
+import FormatListBulletedRoundedIcon from "@mui/icons-material/FormatListBulletedRounded";
+import MoreHorizRoundedIcon from "@mui/icons-material/MoreHorizRounded";
+import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import {
   Alert,
-  Chip,
   Box,
   Button,
+  Checkbox,
+  Chip,
   CircularProgress,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  InputAdornment,
+  MenuItem,
   Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
+  TextField,
   Typography
 } from "@mui/material";
 import TopBar from "../components/TopBar";
 import { API_BASE_URL } from "../config";
 
-const messageColumns = [
-  { key: "jmsMessageId", label: "JMS Message ID", minWidth: 220, type: "id" },
-  { key: "messageId", label: "Message ID", minWidth: 220, type: "id" },
-  { key: "status", label: "Status", minWidth: 120, type: "status" },
-  { key: "dueAt", label: "Due At", minWidth: 170 },
-  { key: "createdAt", label: "Created At", minWidth: 170 },
-  { key: "retainUntil", label: "Retain Until", minWidth: 170 },
-  { key: "retryCount", label: "Retry Count", minWidth: 120, type: "count" },
-  { key: "nextRetryOn", label: "Next Retry On", minWidth: 170 }
+const messageFields = [
+  { key: "messageId", label: "Message ID", color: "#0b63ce", isLinkish: true },
+  { key: "status", label: "Status", toneMap: { Failed: "#c62828", Waiting: "#9a6700", Available: "#2e7d32" } },
+  { key: "dueAt", label: "Due At" },
+  { key: "createdAt", label: "Created At" },
+  { key: "retainUntil", label: "Retain Until" },
+  { key: "retryCount", label: "Retry Count" },
+  { key: "nextRetryOn", label: "Next Retry On" },
+  { key: "correlationId", label: "Correlation ID", color: "#0b63ce", isLinkish: true },
+  { key: "iflowName", label: "iFlow Name" },
+  { key: "packageName", label: "Package Name" }
 ];
 
 const getErrorDetail = (data, fallback) => {
@@ -49,69 +59,6 @@ const getErrorDetail = (data, fallback) => {
   return data?.message || fallback;
 };
 
-const renderCellValue = (column, value) => {
-  if (!value) {
-    return (
-      <Typography variant="body2" sx={{ color: "#94a3b8" }}>
-        -
-      </Typography>
-    );
-  }
-
-  if (column.type === "status") {
-    return (
-      <Chip
-        label={value}
-        size="small"
-        sx={{
-          borderRadius: 1.5,
-          fontWeight: 700,
-          backgroundColor: "#e8f4ff",
-          color: "#0b5cab"
-        }}
-      />
-    );
-  }
-
-  if (column.type === "count") {
-    return (
-      <Chip
-        label={value}
-        size="small"
-        sx={{
-          borderRadius: 1.5,
-          fontWeight: 700,
-          backgroundColor: "#f1f5f9",
-          color: "#334155"
-        }}
-      />
-    );
-  }
-
-  if (column.type === "id") {
-    return (
-      <Typography
-        variant="body2"
-        sx={{
-          fontFamily: '"Consolas", "Courier New", monospace',
-          fontSize: 12.5,
-          color: "#0f172a",
-          wordBreak: "break-word",
-          lineHeight: 1.55
-        }}
-      >
-        {value}
-      </Typography>
-    );
-  }
-
-  return (
-    <Typography variant="body2" sx={{ color: "#0f172a", lineHeight: 1.55 }}>
-      {value}
-    </Typography>
-  );
-};
-
 const JmsQueues = () => {
   const token = localStorage.getItem("token");
   const baseUrl = localStorage.getItem("baseUrl");
@@ -122,11 +69,80 @@ const JmsQueues = () => {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [error, setError] = useState("");
   const [showQueueDetails, setShowQueueDetails] = useState(false);
-  const [selectedQueueLabel, setSelectedQueueLabel] = useState("");
+  const [queueFilter, setQueueFilter] = useState("");
+  const [messageFilter, setMessageFilter] = useState("");
+  const [selectedMessageIds, setSelectedMessageIds] = useState([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [moveDialogOpen, setMoveDialogOpen] = useState(false);
+  const [targetQueueName, setTargetQueueName] = useState("");
+  const [moveLoading, setMoveLoading] = useState(false);
 
-  const queueHeading = useMemo(
-    () => selectedQueueLabel || "Select a queue",
-    [selectedQueueLabel]
+  const filteredQueues = useMemo(() => {
+    const normalizedFilter = queueFilter.trim().toLowerCase();
+    if (!normalizedFilter) {
+      return queues;
+    }
+
+    return queues.filter((queue) => queue.name.toLowerCase().includes(normalizedFilter));
+  }, [queueFilter, queues]);
+
+  const filteredMessages = useMemo(() => {
+    const normalizedFilter = messageFilter.trim().toLowerCase();
+    if (!normalizedFilter) {
+      return messages;
+    }
+
+    return messages.filter((message) =>
+      [message.jmsMessageId, message.messageId, message.correlationId]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalizedFilter))
+    );
+  }, [messageFilter, messages]);
+
+  const allVisibleMessageIds = useMemo(
+    () => filteredMessages.map((message) => message.id),
+    [filteredMessages]
+  );
+
+  const allVisibleSelected =
+    allVisibleMessageIds.length > 0 &&
+    allVisibleMessageIds.every((messageId) => selectedMessageIds.includes(messageId));
+
+  const hasPartialSelection =
+    allVisibleMessageIds.some((messageId) => selectedMessageIds.includes(messageId)) &&
+    !allVisibleSelected;
+
+  const toggleMessageSelection = (messageId) => {
+    setSelectedMessageIds((currentIds) =>
+      currentIds.includes(messageId)
+        ? currentIds.filter((id) => id !== messageId)
+        : [...currentIds, messageId]
+    );
+  };
+
+  const toggleSelectAllVisible = () => {
+    setSelectedMessageIds((currentIds) => {
+      if (allVisibleSelected) {
+        return currentIds.filter((id) => !allVisibleMessageIds.includes(id));
+      }
+
+      return Array.from(new Set([...currentIds, ...allVisibleMessageIds]));
+    });
+  };
+
+  const toggleSelectionMode = () => {
+    setSelectionMode((currentValue) => {
+      if (currentValue) {
+        setSelectedMessageIds([]);
+      }
+
+      return !currentValue;
+    });
+  };
+
+  const selectedMessages = useMemo(
+    () => messages.filter((message) => selectedMessageIds.includes(message.id)),
+    [messages, selectedMessageIds]
   );
 
   const loadQueues = useCallback(async () => {
@@ -134,7 +150,8 @@ const JmsQueues = () => {
     setError("");
     setMessages([]);
     setSelectedQueue("");
-    setSelectedQueueLabel("");
+    setSelectedMessageIds([]);
+    setSelectionMode(false);
 
     try {
       const response = await fetch(`${API_BASE_URL}/jms-queues`, {
@@ -160,10 +177,11 @@ const JmsQueues = () => {
   const loadMessages = useCallback(async (queue) => {
     setShowQueueDetails(true);
     setSelectedQueue(queue.key || queue.name);
-    setSelectedQueueLabel(queue.name);
     setMessages([]);
     setMessagesLoading(true);
     setError("");
+    setSelectedMessageIds([]);
+    setSelectionMode(false);
 
     try {
       const response = await fetch(`${API_BASE_URL}/jms-messages`, {
@@ -190,6 +208,63 @@ const JmsQueues = () => {
       setMessagesLoading(false);
     }
   }, [baseUrl, token]);
+
+  const openMoveDialog = () => {
+    setTargetQueueName("");
+    setMoveDialogOpen(true);
+  };
+
+  const closeMoveDialog = () => {
+    if (moveLoading) {
+      return;
+    }
+
+    setMoveDialogOpen(false);
+    setTargetQueueName("");
+  };
+
+  const handleMoveMessages = async () => {
+    if (!targetQueueName || !selectedQueue || selectedMessages.length === 0) {
+      return;
+    }
+
+    setMoveLoading(true);
+    setError("");
+
+    try {
+      const sourceQueue = queues.find((queue) => (queue.key || queue.name) === selectedQueue);
+      const response = await fetch(`${API_BASE_URL}/jms-messages/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token,
+          baseUrl,
+          sourceQueueName: sourceQueue?.name || selectedQueue,
+          targetQueueName,
+          messages: selectedMessages.map((message) => ({
+            jmsMessageId: message.jmsMessageId,
+            failed: message.failed
+          }))
+        })
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(getErrorDetail(data, "Failed to move JMS messages."));
+      }
+
+      closeMoveDialog();
+      if (sourceQueue) {
+        await loadMessages(sourceQueue);
+      }
+      await loadQueues();
+    } catch (moveError) {
+      console.error("failed to move JMS messages", moveError);
+      setError(moveError.message || "Failed to move JMS messages.");
+    } finally {
+      setMoveLoading(false);
+    }
+  };
 
   useEffect(() => {
     loadQueues();
@@ -220,7 +295,6 @@ const JmsQueues = () => {
                   JMS Queues
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  View the message queue count first, then open it to inspect queue messages.
                 </Typography>
               </Box>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1.25}>
@@ -277,8 +351,7 @@ const JmsQueues = () => {
                   Available queues
                 </Typography>
               </Stack>
-              <Stack justifyContent="space-between" alignItems="flex-end">
-                <DnsRoundedIcon sx={{ fontSize: 38, color: "#9db2c9" }} />
+              <Stack justifyContent="flex-end" alignItems="flex-end">
                 <ArrowForwardRoundedIcon sx={{ fontSize: 28, color: "#0b84d6" }} />
               </Stack>
             </Button>
@@ -289,7 +362,7 @@ const JmsQueues = () => {
               <Paper
                 elevation={0}
                 sx={{
-                  width: { xs: "100%", md: 390 },
+                  width: { xs: "100%", md: 420 },
                   border: "1px solid #d7dee8",
                   borderRadius: 3,
                   overflow: "hidden",
@@ -297,73 +370,106 @@ const JmsQueues = () => {
                   boxShadow: "0 14px 28px rgba(15, 23, 42, 0.05)"
                 }}
               >
-                <Box sx={{ px: 2.25, py: 1.75, borderBottom: "1px solid #d7dee8", background: "#fbfdff" }}>
-                  <Typography variant="h6" fontWeight={800}>Queues</Typography>
-                </Box>
+                <Stack spacing={1.5} sx={{ px: 2.25, py: 1.75, borderBottom: "1px solid #d7dee8", background: "#fbfdff" }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography variant="h5" fontWeight={800}>
+                      Queues ({queues.length})
+                    </Typography>
+                    <IconButton size="small">
+                      <MoreHorizRoundedIcon />
+                    </IconButton>
+                  </Stack>
+                  <TextField
+                    size="small"
+                    placeholder="Filter by Name"
+                    value={queueFilter}
+                    onChange={(event) => setQueueFilter(event.target.value)}
+                    slotProps={{
+                      input: {
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <SearchRoundedIcon fontSize="small" />
+                          </InputAdornment>
+                        )
+                      }
+                    }}
+                    sx={{
+                      maxWidth: 280,
+                      "& .MuiOutlinedInput-root": {
+                        borderRadius: 2,
+                        backgroundColor: "#ffffff"
+                      }
+                    }}
+                  />
+                </Stack>
                 <Stack sx={{ maxHeight: 620, overflow: "auto" }}>
                   {queuesLoading ? (
                     <Box sx={{ display: "flex", justifyContent: "center", py: 5 }}>
                       <CircularProgress size={28} />
                     </Box>
-                  ) : queues.length === 0 ? (
+                  ) : filteredQueues.length === 0 ? (
                     <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
                       No queues found.
                     </Typography>
                   ) : (
-                    queues.map((queue) => (
-                      <Button
+                    filteredQueues.map((queue) => (
+                      <Box
                         key={queue.key || queue.name}
-                        onClick={() => loadMessages(queue)}
-                        endIcon={<ArrowForwardRoundedIcon />}
                         sx={{
-                          justifyContent: "space-between",
                           px: 2.25,
-                          py: 1.5,
-                          borderRadius: 0,
-                          color: selectedQueue === (queue.key || queue.name) ? "primary.dark" : "text.primary",
+                          py: 1.8,
                           bgcolor: selectedQueue === (queue.key || queue.name) ? "#edf6ff" : "#ffffff",
                           borderBottom: "1px solid #eef2f6",
-                          textAlign: "left",
-                          textTransform: "none",
-                          fontWeight: 700
+                          borderLeft: selectedQueue === (queue.key || queue.name) ? "3px solid #0b63ce" : "3px solid transparent"
                         }}
                       >
-                        <Stack
-                          direction="row"
-                          spacing={1}
-                          alignItems="center"
-                          sx={{
-                            minWidth: 0,
-                            flex: 1,
-                            justifyContent: "space-between"
-                          }}
-                        >
-                          <Box
-                            component="span"
-                            sx={{
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              fontSize: 16,
-                              minWidth: 0,
-                              flex: 1
-                            }}
-                          >
-                            {queue.name}
+                        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography
+                              sx={{
+                                fontSize: 16,
+                                fontWeight: 500,
+                                color: "#3d5d87",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap"
+                              }}
+                            >
+                              {queue.name}
+                            </Typography>
+                            <Stack spacing={0.35} sx={{ mt: 1.25 }}>
+                              <Typography variant="body2" sx={{ color: "#4f6b8a" }}>
+                                Access Type:
+                                {" "}
+                                <Box component="span" sx={{ color: "#1f2937" }}>{queue.accessType}</Box>
+                              </Typography>
+                              <Typography variant="body2" sx={{ color: "#4f6b8a" }}>
+                                Usage:
+                                {" "}
+                                <Box component="span" sx={{ color: queue.usage === "OK" ? "#2e7d32" : "#c62828" }}>{queue.usage}</Box>
+                              </Typography>
+                              <Typography variant="body2" sx={{ color: "#4f6b8a" }}>
+                                State:
+                                {" "}
+                                <Box component="span" sx={{ color: queue.state === "Started" ? "#2e7d32" : "#c62828" }}>{queue.state}</Box>
+                              </Typography>
+                              <Typography variant="body2" sx={{ color: "#4f6b8a" }}>
+                                Entries:
+                                {" "}
+                                <Box component="span" sx={{ color: "#1f2937" }}>{queue.entries ?? 0}</Box>
+                              </Typography>
+                            </Stack>
                           </Box>
-                          <Chip
-                            label={queue.entries ?? 0}
-                            size="small"
-                            sx={{
-                              borderRadius: 1.5,
-                              fontWeight: 700,
-                              minWidth: 34,
-                              backgroundColor: "#eef6ff",
-                              color: "#0b84d6"
-                            }}
-                          />
+                          <Stack direction="row" spacing={0.5} alignItems="center">
+                            <IconButton size="small">
+                              <MoreHorizRoundedIcon fontSize="small" />
+                            </IconButton>
+                            <IconButton size="small" onClick={() => loadMessages(queue)}>
+                              <ArrowForwardRoundedIcon fontSize="small" />
+                            </IconButton>
+                          </Stack>
                         </Stack>
-                      </Button>
+                      </Box>
                     ))
                   )}
                 </Stack>
@@ -388,108 +494,205 @@ const JmsQueues = () => {
                   sx={{ px: 2.5, py: 2, borderBottom: "1px solid #d7dee8", background: "#fbfdff" }}
                 >
                   <Box>
-                    <Typography variant="h5" fontWeight={800}>Messages</Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.4 }}>
-                      {queueHeading}
-                    </Typography>
+                    <Typography variant="h5" fontWeight={800}>Messages ({filteredMessages.length})</Typography>
                   </Box>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    {!messagesLoading && selectedQueue && (
-                      <Chip
-                        label={`${messages.length} message${messages.length === 1 ? "" : "s"}`}
-                        size="small"
-                        sx={{
-                          borderRadius: 1.5,
-                          fontWeight: 700,
-                          backgroundColor: "#eef6ff",
-                          color: "#0b84d6"
-                        }}
-                      />
-                    )}
+                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ width: { xs: "100%", sm: "auto" } }}>
+                    <TextField
+                      size="small"
+                      placeholder="Message ID, Correlation ID"
+                      value={messageFilter}
+                      onChange={(event) => setMessageFilter(event.target.value)}
+                      slotProps={{
+                        input: {
+                          startAdornment: (
+                            <InputAdornment position="start">
+                              <SearchRoundedIcon fontSize="small" />
+                            </InputAdornment>
+                          )
+                        }
+                      }}
+                      sx={{
+                        minWidth: { xs: "100%", sm: 300 },
+                        "& .MuiOutlinedInput-root": {
+                          borderRadius: 2,
+                          backgroundColor: "#ffffff"
+                        }
+                      }}
+                    />
+                    <Button
+                      variant="text"
+                      startIcon={<DriveFileMoveOutlinedIcon />}
+                      disabled={!selectionMode || selectedMessageIds.length === 0}
+                      onClick={openMoveDialog}
+                      sx={{ textTransform: "none", fontWeight: 600, color: "#91b8ee" }}
+                    >
+                      Move
+                    </Button>
+                    <Button
+                      variant="text"
+                      startIcon={<ReplayRoundedIcon />}
+                      disabled={!selectionMode || selectedMessageIds.length === 0}
+                      sx={{ textTransform: "none", fontWeight: 600, color: "#91b8ee" }}
+                    >
+                      Retry
+                    </Button>
+                    <Button
+                      variant="text"
+                      startIcon={<DeleteOutlineRoundedIcon />}
+                      disabled={!selectionMode || selectedMessageIds.length === 0}
+                      sx={{ textTransform: "none", fontWeight: 600, color: "#91b8ee" }}
+                    >
+                      Delete
+                    </Button>
+                    <IconButton size="small" sx={{ color: selectionMode ? "#0b63ce" : "#5f7fa5" }} onClick={toggleSelectionMode}>
+                      <FormatListBulletedRoundedIcon />
+                    </IconButton>
+                    <IconButton size="small" sx={{ color: "#0b63ce" }}>
+                      <MoreHorizRoundedIcon />
+                    </IconButton>
                     {messagesLoading && <CircularProgress size={22} />}
                   </Stack>
                 </Stack>
 
-                <TableContainer sx={{ maxHeight: 620, background: "#ffffff" }}>
-                  <Table stickyHeader size="small">
-                    <TableHead>
-                      <TableRow>
-                        {messageColumns.map((column) => (
-                          <TableCell
-                            key={column.key}
-                            sx={{
-                              bgcolor: "#edf3fa",
-                              fontWeight: 800,
-                              color: "#0f172a",
-                              borderRight: "1px solid #d7e0ea",
-                              whiteSpace: "nowrap",
-                              minWidth: column.minWidth
-                            }}
-                          >
-                            {column.label}
-                          </TableCell>
-                        ))}
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {!selectedQueue ? (
-                        <TableRow>
-                          <TableCell colSpan={messageColumns.length} align="center">
-                            Select a queue to view messages.
-                          </TableCell>
-                        </TableRow>
-                      ) : messagesLoading ? (
-                        <TableRow>
-                          <TableCell colSpan={messageColumns.length} align="center">
-                            <CircularProgress size={22} />
-                          </TableCell>
-                        </TableRow>
-                      ) : messages.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={messageColumns.length} align="center">
-                            No messages found in this queue.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        messages.map((message) => (
-                          <TableRow
-                            key={message.id}
-                            hover
-                            sx={{
-                              "&:nth-of-type(even)": {
-                                backgroundColor: "#fafcff"
-                              },
-                              "&:hover": {
-                                backgroundColor: "#f2f8ff"
-                              }
-                            }}
-                          >
-                            {messageColumns.map((column) => (
-                              <TableCell
-                                key={`${message.id}-${column.key}`}
+                <Stack sx={{ maxHeight: 620, overflow: "auto", background: "#ffffff" }}>
+                  {!selectedQueue ? (
+                    <Typography sx={{ p: 3, color: "#64748b" }}>
+                      Select a queue to view messages.
+                    </Typography>
+                  ) : messagesLoading ? (
+                    <Box sx={{ display: "flex", justifyContent: "center", py: 5 }}>
+                      <CircularProgress size={24} />
+                    </Box>
+                  ) : filteredMessages.length === 0 ? (
+                    <Typography sx={{ p: 3, color: "#64748b" }}>
+                      No messages found in this queue.
+                    </Typography>
+                  ) : (
+                    <>
+                      <Box
+                        sx={{
+                          px: 2.25,
+                          py: 1.2,
+                          borderBottom: "1px solid #dde6ef",
+                          backgroundColor: "#ffffff"
+                        }}
+                      >
+                        <Stack direction="row" spacing={1.5} alignItems="center">
+                          {selectionMode && (
+                            <Checkbox
+                              checked={allVisibleSelected}
+                              indeterminate={hasPartialSelection}
+                              onChange={toggleSelectAllVisible}
+                              sx={{ p: 0.5, color: "#6b85a4" }}
+                            />
+                          )}
+                          <Typography sx={{ fontSize: 15, fontWeight: 700, color: "#24364d" }}>
+                            JMS Message ID
+                          </Typography>
+                        </Stack>
+                      </Box>
+                      {filteredMessages.map((message, index) => (
+                        <Box
+                          key={message.id}
+                          sx={{
+                            px: 2.25,
+                            py: 2.25,
+                            backgroundColor: index % 2 === 1 ? "#f4f7fb" : "#ffffff",
+                            borderBottom: "1px solid #dde6ef"
+                          }}
+                        >
+                          <Stack direction="row" spacing={1.5} alignItems="flex-start">
+                            {selectionMode && (
+                              <Checkbox
+                                checked={selectedMessageIds.includes(message.id)}
+                                onChange={() => toggleMessageSelection(message.id)}
+                                sx={{ p: 0.5, mt: 0.1, color: "#6b85a4" }}
+                              />
+                            )}
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography
                                 sx={{
-                                  borderRight: "1px solid #e2e8f0",
-                                  borderBottom: "1px solid #edf2f7",
-                                  verticalAlign: "top",
-                                  minWidth: column.minWidth,
-                                  maxWidth: column.type === "id" ? 260 : 190,
-                                  py: 1.75
+                                  fontSize: 16,
+                                  fontWeight: 500,
+                                  color: "#1f2937",
+                                  wordBreak: "break-word"
                                 }}
                               >
-                                {renderCellValue(column, message[column.key])}
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
+                                {message.jmsMessageId || "-"}
+                              </Typography>
+                              <Stack spacing={0.7} sx={{ mt: 1.5 }}>
+                                {messageFields.map((field) => {
+                                  const value = message[field.key];
+                                  const displayValue = value || "-";
+                                  return (
+                                    <Typography key={`${message.id}-${field.key}`} sx={{ fontSize: 15, color: "#4f6b8a", lineHeight: 1.45 }}>
+                                      {field.label}
+                                      :{" "}
+                                      <Box
+                                        component="span"
+                                        sx={{
+                                          color:
+                                            field.key === "status"
+                                              ? field.toneMap?.[value] || "#1f2937"
+                                              : field.color || "#1f2937",
+                                          fontWeight: field.key === "status" || field.isLinkish ? 500 : 400,
+                                          wordBreak: "break-word"
+                                        }}
+                                      >
+                                        {displayValue}
+                                      </Box>
+                                    </Typography>
+                                  );
+                                })}
+                              </Stack>
+                            </Box>
+                          </Stack>
+                        </Box>
+                      ))}
+                    </>
+                  )}
+                </Stack>
               </Paper>
             </Stack>
           )}
         </Stack>
       </Container>
+
+      <Dialog open={moveDialogOpen} onClose={closeMoveDialog} fullWidth maxWidth="sm">
+        <DialogTitle>Move Messages</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Stack spacing={2}>
+            <Typography variant="body2" color="text.secondary">
+              Selected messages: {selectedMessages.length}
+            </Typography>
+            <TextField
+              select
+              label="Target Queue"
+              value={targetQueueName}
+              onChange={(event) => setTargetQueueName(event.target.value)}
+              fullWidth
+            >
+              {queues
+                .filter((queue) => queue.name !== (queues.find((queue) => (queue.key || queue.name) === selectedQueue)?.name || selectedQueue))
+                .map((queue) => (
+                  <MenuItem key={queue.key || queue.name} value={queue.name}>
+                    {queue.name}
+                  </MenuItem>
+                ))}
+            </TextField>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeMoveDialog} disabled={moveLoading}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleMoveMessages}
+            disabled={!targetQueueName || moveLoading || selectedMessages.length === 0}
+          >
+            {moveLoading ? "Moving..." : "Move"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
