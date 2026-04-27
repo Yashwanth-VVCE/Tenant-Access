@@ -291,6 +291,7 @@ const artifactCache = new Map();
 const ARTIFACT_CACHE_TTL_MS = 5 * 60 * 1000;
 const ARTIFACT_RETRY_LIMIT = 8;
 const ARTIFACT_BATCH_CONCURRENCY = 4;
+const messageProcessingLogCache = new Map();
 
 const buildBaseUrlCandidates = (baseUrl) => {
     const cleanedBaseUrl = cleanUrl(baseUrl);
@@ -450,6 +451,27 @@ const getArtifactCacheEntry = (cacheKey) => {
     }
 
     return cachedArtifacts;
+};
+
+const getTimedCacheEntry = (cache, cacheKey) => {
+  const cachedValue = cache.get(cacheKey);
+
+  if (!cachedValue || cachedValue.expiresAt <= Date.now()) {
+    if (cachedValue) {
+      cache.delete(cacheKey);
+    }
+
+    return null;
+  }
+
+  return cachedValue.value;
+};
+
+const setTimedCacheEntry = (cache, cacheKey, value, ttlMs) => {
+  cache.set(cacheKey, {
+    value,
+    expiresAt: Date.now() + ttlMs
+  });
 };
 
 const getTriggerCredentials = () => {
@@ -791,6 +813,21 @@ const findValueInNamedCollection = (input, aliases, maxDepth = 4) => {
 
 const encodeODataKey = (value) => encodeURIComponent(String(value).replace(/'/g, "''"));
 
+const getQueueAccessType = (exclusive) => {
+  const normalized = String(exclusive ?? "").trim();
+  return normalized === "0" ? "Non-Exclusive" : "Exclusive";
+};
+
+const getQueueUsage = (active) => {
+  const normalized = String(active ?? "").trim();
+  return normalized === "1" ? "OK" : "Stopped";
+};
+
+const getQueueState = (state) => {
+  const normalized = String(state ?? "").trim();
+  return normalized === "0" ? "Started" : "Stopped";
+};
+
 const mapQueueRecord = (queue, index) => ({
   id:
     firstNonEmpty(
@@ -819,7 +856,9 @@ const mapQueueRecord = (queue, index) => ({
     queue.Id,
     `Queue ${index + 1}`
   ),
-  accessType: firstNonEmpty(queue.AccessType, queue.Access_Mode, queue.Type, ""),
+  accessType: firstNonEmpty(queue.AccessType, queue.Access_Mode, getQueueAccessType(queue.Exclusive), ""),
+  usage: getQueueUsage(queue.Active),
+  state: getQueueState(queue.State),
   entries:
     Number(
       firstNonEmpty(
@@ -866,7 +905,8 @@ const queueMessageAliases = {
   createdAt: ["CreatedAt", "createdAt", "CreatedOn", "CreatedDate", "EnqueueTime", "Timestamp", "timestamp", "CREATED_AT", "Created", "InsertedAt"],
   retainUntil: ["ExpirationDate", "RetainUntil", "retainUntil", "RetentionEnd", "ExpiresAt", "ExpiryDate", "RETAIN_UNTIL", "ExpirationTime"],
   retryCount: ["RetryCount", "retryCount", "RedeliveryCount", "DeliveryAttempt", "AttemptCount", "RETRY_COUNT", "Retries"],
-  nextRetryOn: ["NextRetry", "NextRetryOn", "nextRetryOn", "NextRetryAt", "NextVisibleAt", "NEXT_RETRY_ON"]
+  nextRetryOn: ["NextRetry", "NextRetryOn", "nextRetryOn", "NextRetryAt", "NextVisibleAt", "NEXT_RETRY_ON"],
+  correlationId: ["SapMplCorrelationId", "CorrelationId", "correlationId", "SapCorrelationId"]
 };
 
 const pickMessageValue = (message, aliases) =>
@@ -883,9 +923,10 @@ const mapQueueMessage = (message, index) => ({
     pickMessageValue(message, queueMessageAliases.messageId),
     pickMessageValue(message, ["MessageGuid", "messageGuid", "MessageUUID", "messageUUID"])
   ),
+  failed: typeof pickMessageValue(message, ["Failed"]) === "boolean" ? pickMessageValue(message, ["Failed"]) : false,
   status:
     typeof pickMessageValue(message, ["Failed"]) === "boolean"
-      ? (pickMessageValue(message, ["Failed"]) ? "Failed" : "Available")
+      ? (pickMessageValue(message, ["Failed"]) ? "Failed" : "Waiting")
       : pickMessageValue(message, queueMessageAliases.status),
   dueAt: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.dueAt)),
   createdAt: formatSapTimestamp(pickMessageValue(message, queueMessageAliases.createdAt)),
@@ -895,8 +936,118 @@ const mapQueueMessage = (message, index) => ({
     const nextRetryValue = pickMessageValue(message, queueMessageAliases.nextRetryOn);
     return nextRetryValue === "0" || nextRetryValue === 0 ? "" : formatSapTimestamp(nextRetryValue);
   })(),
+  correlationId: pickMessageValue(message, queueMessageAliases.correlationId),
+  iflowName: "",
+  packageName: "",
   rawFields: flattenObject(message)
 });
+
+const fetchMessageProcessingLog = async (baseUrl, token, mplId) => {
+  const cacheKey = `${baseUrl}::mpl::${mplId}`;
+  const cachedValue = getTimedCacheEntry(messageProcessingLogCache, cacheKey);
+
+  if (cachedValue) {
+    return cachedValue;
+  }
+
+  const candidates = buildBaseUrlCandidates(baseUrl);
+  let lastError;
+
+  for (const candidate of candidates) {
+    try {
+      const response = await axios.get(
+        `${candidate}/api/v1/MessageProcessingLogs('${encodeODataKey(mplId)}')`,
+        {
+          headers: tenantHeaders(token),
+          params: {
+            $format: "json"
+          },
+          timeout: 30000
+        }
+      );
+
+      const mpl = response.data?.d || response.data;
+      const enriched = {
+        iflowName: mpl?.IntegrationFlowName || mpl?.IntegrationArtifact?.Name || "",
+        packageName: mpl?.IntegrationArtifact?.PackageName || mpl?.IntegrationArtifact?.PackageId || "",
+        status: mpl?.Status || mpl?.CustomStatus || "",
+        correlationId: mpl?.CorrelationId || mpl?.MessageGuid || ""
+      };
+
+      setTimedCacheEntry(messageProcessingLogCache, cacheKey, enriched, ARTIFACT_CACHE_TTL_MS);
+      return enriched;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `fetchMessageProcessingLog failed for ${candidate} and MPL ${mplId}:`,
+        error.response?.data || error.message
+      );
+    }
+  }
+
+  throw lastError;
+};
+
+const enrichQueueMessages = async (baseUrl, token, messages) => {
+  const enrichedMessages = await Promise.all(
+    messages.map(async (message) => {
+      if (!message.messageId) {
+        return message;
+      }
+
+      try {
+        const mplDetails = await fetchMessageProcessingLog(baseUrl, token, message.messageId);
+        return {
+          ...message,
+          status: message.status || mplDetails.status,
+          correlationId: mplDetails.correlationId || message.correlationId,
+          iflowName: mplDetails.iflowName || "",
+          packageName: mplDetails.packageName || ""
+        };
+      } catch {
+        return message;
+      }
+    })
+  );
+
+  return enrichedMessages;
+};
+
+const moveJmsMessage = async (baseUrl, token, sourceQueueName, targetQueueName, jmsMessageId, failed) => {
+  const candidates = buildBaseUrlCandidates(baseUrl);
+  const encodedMessageId = encodeODataKey(jmsMessageId);
+  const encodedSourceQueue = encodeODataKey(sourceQueueName);
+  const encodedTargetQueue = encodeODataKey(targetQueueName);
+  let lastError;
+
+  for (const candidate of candidates) {
+    try {
+      await axios.put(
+        `${candidate}/api/v1/JmsMessages(Msgid='${encodedMessageId}',Name='${encodedSourceQueue}',Failed=${failed ? "true" : "false"})/$links/Queue`,
+        {
+          uri: `${candidate}/api/v1/Queues('${encodedTargetQueue}')`
+        },
+        {
+          headers: {
+            ...tenantHeaders(token),
+            "Content-Type": "application/json"
+          },
+          timeout: 30000
+        }
+      );
+
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `moveJmsMessage failed for ${jmsMessageId} from ${sourceQueueName} to ${targetQueueName} on ${candidate}:`,
+        error.response?.data || error.message
+      );
+    }
+  }
+
+  throw lastError || new Error("Failed to move JMS message.");
+};
 
 const getJmsQueueRecords = async (baseUrl, token) => {
   const candidates = buildBaseUrlCandidates(baseUrl);
@@ -1013,11 +1164,46 @@ app.post("/jms-messages", async (req, res) => {
 
   try {
     const messages = await getJmsMessagesForQueue(baseUrl, token, queueName, queueKey);
-    return res.json({ messages });
+    const enrichedMessages = await enrichQueueMessages(baseUrl, token, messages);
+    return res.json({ messages: enrichedMessages });
   } catch (error) {
     console.error("jms-messages error:", error.response?.data || error.message);
     return res.status(500).json({
       message: "Failed to fetch JMS messages.",
+      detail: error.response?.data || error.message
+    });
+  }
+});
+
+app.post("/jms-messages/move", async (req, res) => {
+  let { token, baseUrl, sourceQueueName, targetQueueName, messages } = req.body || {};
+  baseUrl = cleanUrl(baseUrl);
+
+  if (!token || !baseUrl || !sourceQueueName || !targetQueueName || !Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({
+      message: "token, baseUrl, sourceQueueName, targetQueueName, and messages are required."
+    });
+  }
+
+  try {
+    await Promise.all(
+      messages.map((message) =>
+        moveJmsMessage(
+          baseUrl,
+          token,
+          sourceQueueName,
+          targetQueueName,
+          message.jmsMessageId,
+          Boolean(message.failed)
+        )
+      )
+    );
+
+    return res.json({ message: "Messages moved successfully." });
+  } catch (error) {
+    console.error("jms-messages/move error:", error.response?.data || error.message);
+    return res.status(500).json({
+      message: "Failed to move JMS messages.",
       detail: error.response?.data || error.message
     });
   }
