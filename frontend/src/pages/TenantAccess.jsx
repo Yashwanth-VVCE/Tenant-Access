@@ -157,7 +157,6 @@ const TenantAccess = () => {
                   Tenant Connected
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  Choose where you want to continue.
                 </Typography>
               </Stack>
 
