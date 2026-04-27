@@ -4,15 +4,15 @@ import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import DriveFileMoveOutlinedIcon from "@mui/icons-material/DriveFileMoveOutlined";
 import FormatListBulletedRoundedIcon from "@mui/icons-material/FormatListBulletedRounded";
 import MoreHorizRoundedIcon from "@mui/icons-material/MoreHorizRounded";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import ReplayRoundedIcon from "@mui/icons-material/ReplayRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
+import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import {
-  Alert,
   Box,
   Button,
   Checkbox,
-  Chip,
   CircularProgress,
   Container,
   Dialog,
@@ -29,6 +29,10 @@ import {
 } from "@mui/material";
 import TopBar from "../components/TopBar";
 import { API_BASE_URL } from "../config";
+
+const JMS_QUEUE_WARNING_THRESHOLD = 27;
+const JMS_BROKER_KEY = "Broker1";
+const MB_DIVISOR = 1024 * 1024;
 
 const messageFields = [
   { key: "messageId", label: "Message ID", color: "#0b63ce", isLinkish: true },
@@ -59,6 +63,12 @@ const getErrorDetail = (data, fallback) => {
   return data?.message || fallback;
 };
 
+const formatCapacityMb = (valueInBytes) => `${(Number(valueInBytes || 0) / MB_DIVISOR).toFixed(2)} MB`;
+
+const clampPercent = (value) => Math.max(0, Math.min(100, value));
+
+const getAvailabilityLabel = (isHigh) => (Number(isHigh) > 0 ? "High" : "Available");
+
 const JmsQueues = () => {
   const token = localStorage.getItem("token");
   const baseUrl = localStorage.getItem("baseUrl");
@@ -76,6 +86,9 @@ const JmsQueues = () => {
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [targetQueueName, setTargetQueueName] = useState("");
   const [moveLoading, setMoveLoading] = useState(false);
+  const [resourceDetails, setResourceDetails] = useState(null);
+  const [resourceLoading, setResourceLoading] = useState(false);
+  const [resourceDialogOpen, setResourceDialogOpen] = useState(false);
 
   const filteredQueues = useMemo(() => {
     const normalizedFilter = queueFilter.trim().toLowerCase();
@@ -144,6 +157,41 @@ const JmsQueues = () => {
     () => messages.filter((message) => selectedMessageIds.includes(message.id)),
     [messages, selectedMessageIds]
   );
+
+  const startedQueuesCount = useMemo(
+    () => queues.filter((queue) => queue.state === "Started").length,
+    [queues]
+  );
+
+  const stoppedQueuesCount = Math.max(queues.length - startedQueuesCount, 0);
+
+  const resourceSummary = useMemo(() => {
+    if (!resourceDetails) {
+      return null;
+    }
+
+    const queueUsagePercent = resourceDetails.maxQueueNumber > 0
+      ? clampPercent((resourceDetails.queueNumber / resourceDetails.maxQueueNumber) * 100)
+      : 0;
+    const capacityUsagePercent = resourceDetails.maxCapacity > 0
+      ? clampPercent((resourceDetails.capacity / resourceDetails.maxCapacity) * 100)
+      : 0;
+    const isCritical = resourceDetails.queueNumber > JMS_QUEUE_WARNING_THRESHOLD;
+
+    return {
+      ...resourceDetails,
+      isCritical,
+      queueUsagePercent,
+      capacityUsagePercent,
+      currentCapacityLabel: formatCapacityMb(resourceDetails.capacity),
+      maxCapacityLabel: `${Math.round(resourceDetails.maxCapacity / MB_DIVISOR)} MB`,
+      queueUsageLabel: `OK(${resourceDetails.capacityOk}) / Critical(${resourceDetails.capacityWarning}) / Error(${resourceDetails.capacityError})`,
+      queueStateLabel: `Started(${startedQueuesCount}) / Stopped(${stoppedQueuesCount})`,
+      transactionsLabel: getAvailabilityLabel(resourceDetails.isTransactedSessionsHigh),
+      providersLabel: getAvailabilityLabel(resourceDetails.isProducersHigh),
+      consumersLabel: getAvailabilityLabel(resourceDetails.isConsumersHigh)
+    };
+  }, [resourceDetails, startedQueuesCount, stoppedQueuesCount]);
 
   const loadQueues = useCallback(async () => {
     setQueuesLoading(true);
@@ -266,6 +314,35 @@ const JmsQueues = () => {
     }
   };
 
+  const loadJmsResourceDetails = async () => {
+    setResourceLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/jms-resource-details`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token,
+          baseUrl,
+          brokerKey: JMS_BROKER_KEY
+        })
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(getErrorDetail(data, "Failed to load JMS resource details."));
+      }
+
+      setResourceDetails(data.resource || null);
+    } catch (loadError) {
+      console.error("failed to load JMS resource details", loadError);
+      setError(loadError.message || "Failed to load JMS resource details.");
+    } finally {
+      setResourceLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadQueues();
   }, [loadQueues]);
@@ -311,7 +388,20 @@ const JmsQueues = () => {
             </Stack>
           </Paper>
 
-          {error && <Alert severity="error">{error}</Alert>}
+          {error && (
+            <Box
+              sx={{
+                borderRadius: 2.5,
+                border: "1px solid #fecaca",
+                background: "#fef2f2",
+                color: "#b91c1c",
+                px: 2,
+                py: 1.5
+              }}
+            >
+              <Typography variant="body2" fontWeight={600}>{error}</Typography>
+            </Box>
+          )}
 
           <Paper
             elevation={0}
@@ -357,6 +447,48 @@ const JmsQueues = () => {
             </Button>
           </Paper>
 
+          {resourceSummary && (
+            <Box
+              sx={{
+                borderRadius: 2,
+                border: resourceSummary.isCritical ? "1px solid #facc15" : "1px solid #bfdbfe",
+                background: resourceSummary.isCritical ? "#fff8db" : "#eff6ff",
+                px: 2,
+                py: 1.5
+              }}
+            >
+              <Stack direction="row" spacing={1.25} alignItems="center" flexWrap="wrap">
+                {resourceSummary.isCritical ? (
+                  <WarningAmberRoundedIcon sx={{ color: "#b45309" }} />
+                ) : (
+                  <InfoOutlinedIcon sx={{ color: "#1d4ed8" }} />
+                )}
+                <Typography sx={{ fontSize: 16, color: "#1f2937" }}>
+                  {resourceSummary.isCritical
+                    ? "JMS Resources: Critical."
+                    : "JMS Resource Details."}
+                </Typography>
+                <Button
+                  variant="text"
+                  onClick={() => setResourceDialogOpen(true)}
+                  sx={{
+                    minWidth: 0,
+                    p: 0,
+                    textTransform: "none",
+                    fontWeight: 700,
+                    color: "#0b63ce",
+                    "&:hover": {
+                      background: "transparent",
+                      textDecoration: "underline"
+                    }
+                  }}
+                >
+                  Details
+                </Button>
+              </Stack>
+            </Box>
+          )}
+
           {showQueueDetails && (
             <Stack direction={{ xs: "column", md: "row" }} spacing={2.5} alignItems="stretch">
               <Paper
@@ -375,9 +507,19 @@ const JmsQueues = () => {
                     <Typography variant="h5" fontWeight={800}>
                       Queues ({queues.length})
                     </Typography>
-                    <IconButton size="small">
-                      <MoreHorizRoundedIcon />
-                    </IconButton>
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      <Button
+                        variant="text"
+                        onClick={loadJmsResourceDetails}
+                        disabled={resourceLoading}
+                        sx={{ textTransform: "none", fontWeight: 700, color: "#0b63ce", minWidth: 0 }}
+                      >
+                        {resourceLoading ? "Checking..." : "Check"}
+                      </Button>
+                      <IconButton size="small">
+                        <MoreHorizRoundedIcon />
+                      </IconButton>
+                    </Stack>
                   </Stack>
                   <TextField
                     size="small"
@@ -691,6 +833,149 @@ const JmsQueues = () => {
           >
             {moveLoading ? "Moving..." : "Move"}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={resourceDialogOpen}
+        onClose={() => setResourceDialogOpen(false)}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle sx={{ fontWeight: 800 }}>JMS Resources</DialogTitle>
+        <DialogContent dividers sx={{ px: { xs: 2, sm: 4 }, py: 3 }}>
+          {resourceSummary ? (
+            <Stack spacing={4}>
+              <Stack spacing={1.5}>
+                <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1}>
+                  <Typography sx={{ fontSize: 18, color: "#516b89" }}>Number of Queues:</Typography>
+                  <Typography sx={{ fontSize: 18, color: "#516b89" }}>
+                    Maximum Available: {resourceSummary.maxQueueNumber} Queues
+                  </Typography>
+                </Stack>
+                <Box sx={{ pl: { xs: 0, sm: 24 } }}>
+                  <Typography
+                    sx={{
+                      mb: 1,
+                      textAlign: "right",
+                      fontSize: 18,
+                      fontWeight: 800,
+                      color: resourceSummary.isCritical ? "#c2410c" : "#2e7d32"
+                    }}
+                  >
+                    {resourceSummary.queueNumber} Queues
+                  </Typography>
+                  <Box
+                    sx={{
+                      position: "relative",
+                      height: 26,
+                      border: "1px solid #d7dee8",
+                      background: "#f3f4f6",
+                      overflow: "visible"
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        width: `${resourceSummary.queueUsagePercent}%`,
+                        maxWidth: "100%",
+                        height: "100%",
+                        background: resourceSummary.isCritical ? "#ef6c00" : "#2e7d32"
+                      }}
+                    />
+                    <Box
+                      sx={{
+                        position: "absolute",
+                        top: -6,
+                        bottom: -6,
+                        left: `${clampPercent((JMS_QUEUE_WARNING_THRESHOLD / Math.max(resourceSummary.maxQueueNumber || 1, 1)) * 100)}%`,
+                        borderLeft: "2px dashed #ef6c00"
+                      }}
+                    />
+                  </Box>
+                </Box>
+              </Stack>
+
+              <Stack spacing={1.5}>
+                <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1}>
+                  <Typography sx={{ fontSize: 18, color: "#516b89" }}>Capacity:</Typography>
+                  <Typography sx={{ fontSize: 18, color: "#516b89" }}>
+                    Maximum Available: {resourceSummary.maxCapacityLabel}
+                  </Typography>
+                </Stack>
+                <Box sx={{ pl: { xs: 0, sm: 24 } }}>
+                  <Typography sx={{ mb: 1, fontSize: 18, fontWeight: 800, color: "#2e7d32" }}>
+                    {resourceSummary.currentCapacityLabel}
+                  </Typography>
+                  <Box
+                    sx={{
+                      position: "relative",
+                      height: 26,
+                      border: "1px solid #8aa2c4",
+                      background: "#f3f4f6",
+                      overflow: "visible"
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        width: `${resourceSummary.capacityUsagePercent}%`,
+                        maxWidth: "100%",
+                        height: "100%",
+                        background: "#34a853"
+                      }}
+                    />
+                  </Box>
+                </Box>
+              </Stack>
+
+              <Stack spacing={1.1}>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                  <Typography sx={{ minWidth: 140, textAlign: { xs: "left", sm: "right" }, color: "#516b89", fontSize: 17 }}>
+                    Queue Usage:
+                  </Typography>
+                  <Typography sx={{ color: "#2e7d32", fontSize: 17 }}>
+                    {resourceSummary.queueUsageLabel}
+                  </Typography>
+                </Stack>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                  <Typography sx={{ minWidth: 140, textAlign: { xs: "left", sm: "right" }, color: "#516b89", fontSize: 17 }}>
+                    Queue State:
+                  </Typography>
+                  <Typography sx={{ color: "#2e7d32", fontSize: 17 }}>
+                    {resourceSummary.queueStateLabel}
+                  </Typography>
+                </Stack>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                  <Typography sx={{ minWidth: 140, textAlign: { xs: "left", sm: "right" }, color: "#516b89", fontSize: 17 }}>
+                    Transactions:
+                  </Typography>
+                  <Typography sx={{ color: resourceSummary.transactionsLabel === "Available" ? "#2e7d32" : "#b45309", fontSize: 17 }}>
+                    {resourceSummary.transactionsLabel}
+                  </Typography>
+                </Stack>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                  <Typography sx={{ minWidth: 140, textAlign: { xs: "left", sm: "right" }, color: "#516b89", fontSize: 17 }}>
+                    Providers:
+                  </Typography>
+                  <Typography sx={{ color: resourceSummary.providersLabel === "Available" ? "#2e7d32" : "#b45309", fontSize: 17 }}>
+                    {resourceSummary.providersLabel}
+                  </Typography>
+                </Stack>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+                  <Typography sx={{ minWidth: 140, textAlign: { xs: "left", sm: "right" }, color: "#516b89", fontSize: 17 }}>
+                    Consumers:
+                  </Typography>
+                  <Typography sx={{ color: resourceSummary.consumersLabel === "Available" ? "#2e7d32" : "#b45309", fontSize: 17 }}>
+                    {resourceSummary.consumersLabel}
+                  </Typography>
+                </Stack>
+              </Stack>
+            </Stack>
+          ) : (
+            <Typography color="text.secondary">Run the JMS resource check to view details.</Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setResourceDialogOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>
