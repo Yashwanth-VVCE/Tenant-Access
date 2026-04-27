@@ -1080,6 +1080,56 @@ const getJmsQueueRecords = async (baseUrl, token) => {
   throw lastError || new Error("Unable to fetch JMS queues.");
 };
 
+const toSafeNumber = (value, fallback = 0) => {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+};
+
+const mapJmsBrokerResource = (broker) => ({
+  key: firstNonEmpty(broker?.Key, broker?.Id, broker?.Name, "Broker1"),
+  capacity: toSafeNumber(firstNonEmpty(broker?.Capacity, broker?.capacity, 0)),
+  maxCapacity: toSafeNumber(firstNonEmpty(broker?.MaxCapacity, broker?.maxCapacity, 0)),
+  queueNumber: toSafeNumber(firstNonEmpty(broker?.QueueNumber, broker?.queueNumber, 0)),
+  maxQueueNumber: toSafeNumber(firstNonEmpty(broker?.MaxQueueNumber, broker?.maxQueueNumber, 0)),
+  capacityOk: toSafeNumber(firstNonEmpty(broker?.CapacityOk, broker?.capacityOk, 0)),
+  capacityWarning: toSafeNumber(firstNonEmpty(broker?.CapacityWarning, broker?.capacityWarning, 0)),
+  capacityError: toSafeNumber(firstNonEmpty(broker?.CapacityError, broker?.capacityError, 0)),
+  isQueuesHigh: toSafeNumber(firstNonEmpty(broker?.IsQueuesHigh, broker?.isQueuesHigh, 0)),
+  isMessageSpoolHigh: toSafeNumber(firstNonEmpty(broker?.IsMessageSpoolHigh, broker?.isMessageSpoolHigh, 0)),
+  isTransactedSessionsHigh: toSafeNumber(firstNonEmpty(broker?.IsTransactedSessionsHigh, broker?.isTransactedSessionsHigh, 0)),
+  isConsumersHigh: toSafeNumber(firstNonEmpty(broker?.IsConsumersHigh, broker?.isConsumersHigh, 0)),
+  isProducersHigh: toSafeNumber(firstNonEmpty(broker?.IsProducersHigh, broker?.isProducersHigh, 0))
+});
+
+const getJmsBrokerResource = async (baseUrl, token, brokerKey = "Broker1") => {
+  const candidates = buildBaseUrlCandidates(baseUrl);
+  const encodedBrokerKey = encodeODataKey(brokerKey);
+  let lastError;
+
+  for (const candidate of candidates) {
+    try {
+      const response = await axios.get(`${candidate}/api/v1/JmsBrokers('${encodedBrokerKey}')`, {
+        headers: tenantHeaders(token),
+        params: {
+          $format: "json"
+        },
+        timeout: 30000
+      });
+
+      const brokerPayload = response.data?.d || response.data;
+      return mapJmsBrokerResource(brokerPayload);
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `getJmsBrokerResource failed for ${candidate} and broker ${brokerKey}:`,
+        error.response?.data || error.message
+      );
+    }
+  }
+
+  throw lastError || new Error(`Unable to fetch JMS broker resource details for ${brokerKey}.`);
+};
+
 const getJmsMessagesForQueue = async (baseUrl, token, queueName, queueKey) => {
   const candidates = buildBaseUrlCandidates(baseUrl);
   const queueIdentifiers = Array.from(
@@ -1170,6 +1220,26 @@ app.post("/jms-messages", async (req, res) => {
     console.error("jms-messages error:", error.response?.data || error.message);
     return res.status(500).json({
       message: "Failed to fetch JMS messages.",
+      detail: error.response?.data || error.message
+    });
+  }
+});
+
+app.post("/jms-resource-details", async (req, res) => {
+  let { token, baseUrl, brokerKey } = req.body || {};
+  baseUrl = cleanUrl(baseUrl);
+
+  if (!token || !baseUrl) {
+    return res.status(400).json({ message: "token and baseUrl are required." });
+  }
+
+  try {
+    const resource = await getJmsBrokerResource(baseUrl, token, brokerKey || "Broker1");
+    return res.json({ resource });
+  } catch (error) {
+    console.error("jms-resource-details error:", error.response?.data || error.message);
+    return res.status(500).json({
+      message: "Failed to fetch JMS resource details.",
       detail: error.response?.data || error.message
     });
   }
