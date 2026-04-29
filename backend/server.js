@@ -332,6 +332,12 @@ const extractCookieHeader = (setCookieHeader) => {
     .join("; ");
 };
 
+const formatBodyWithLineNumbers = (body) =>
+  String(body || "")
+    .split(/\r?\n/)
+    .map((line, index) => `${index + 1}: ${line}`)
+    .join("\n");
+
 const isAuthoritativeTenantError = (error) => {
   const status = Number(error?.response?.status || 0);
   const code = String(error?.response?.data?.error?.code || "").trim().toLowerCase();
@@ -353,16 +359,44 @@ const buildIntegrationSuiteODataCandidates = (baseUrl) => {
   const candidates = [];
 
   try {
+    let fixedUrl = cleanedBaseUrl;
+
+    if (fixedUrl.includes("it-cpi001")) {
+      fixedUrl = fixedUrl.replace("it-cpi001", "integrationsuite");
+    }
+
+    const fixed = new URL(fixedUrl);
+    candidates.push(`${fixed.origin}/api/v1`);
+
+    const original = new URL(cleanedBaseUrl);
+    candidates.push(`${original.origin}/api/v1`);
+  } catch {
+    // Ignore malformed URLs and let callers surface the original issue.
+  }
+
+  return [...new Set(candidates.map(cleanUrl).filter(Boolean))];
+};
+
+const buildIntegrationSuiteApiCandidates = (baseUrl) => {
+  const cleanedBaseUrl = cleanUrl(baseUrl);
+
+  if (!cleanedBaseUrl) {
+    return [];
+  }
+
+  const candidates = [];
+
+  try {
     const url = new URL(cleanedBaseUrl);
     const hostnameParts = url.hostname.split(".");
 
     if (hostnameParts.length > 2 && hostnameParts[1] !== "integrationsuite") {
       const integrationSuiteParts = [...hostnameParts];
       integrationSuiteParts[1] = "integrationsuite";
-      candidates.push(`${url.protocol}//${integrationSuiteParts.join(".")}/odata/api/v1`);
+      candidates.push(`${url.protocol}//${integrationSuiteParts.join(".")}/api/v1`);
     }
 
-    candidates.push(`${url.origin}/odata/api/v1`);
+    candidates.push(`${url.origin}/api/v1`);
   } catch {
     // Ignore malformed URLs and let callers surface the original issue.
   }
@@ -1067,6 +1101,16 @@ const enrichQueueMessages = async (baseUrl, token, messages) => {
 
 const moveJmsMessage = async (baseUrl, token, sourceQueueName, targetQueueName, jmsMessageId, failed) => {
   try {
+    await moveJmsMessageDirect(baseUrl, token, sourceQueueName, targetQueueName, jmsMessageId);
+    return;
+  } catch (directError) {
+    console.warn(
+      `moveJmsMessage direct API route failed for ${jmsMessageId} from ${sourceQueueName} to ${targetQueueName}:`,
+      directError.response?.data || directError.message
+    );
+  }
+
+  try {
     await moveJmsMessageViaBatch(baseUrl, token, sourceQueueName, targetQueueName, jmsMessageId);
     return;
   } catch (batchError) {
@@ -1154,6 +1198,7 @@ const getODataCsrfContext = async (serviceBaseUrl, token) => {
 
   for (const candidatePath of candidatePaths) {
     try {
+      console.log(`[csrf] trying ${candidatePath}`);
       const response = await axios.get(candidatePath, {
         headers: {
           ...tenantHeaders(token),
@@ -1164,14 +1209,24 @@ const getODataCsrfContext = async (serviceBaseUrl, token) => {
       });
 
       const csrfToken = response.headers["x-csrf-token"];
+      console.log(
+        `[csrf] response ${candidatePath} -> status=${response.status}, tokenPresent=${Boolean(csrfToken)}, cookiesPresent=${Boolean(response.headers["set-cookie"]?.length)}`
+      );
       if (csrfToken) {
         return {
           csrfToken,
           cookieHeader: extractCookieHeader(response.headers["set-cookie"])
         };
       }
+
+      console.log(
+        `[csrf] no token from ${candidatePath}; content-type=${response.headers["content-type"] || ""}; bodySnippet=${String(response.data || "").slice(0, 200)}`
+      );
     } catch (error) {
       lastError = error;
+      console.warn(
+        `[csrf] failed ${candidatePath}: status=${error.response?.status || ""} content-type=${error.response?.headers?.["content-type"] || ""} body=${typeof error.response?.data === "string" ? error.response.data.slice(0, 300) : JSON.stringify(error.response?.data || error.message).slice(0, 300)}`
+      );
     }
   }
 
@@ -1183,6 +1238,142 @@ const getODataCsrfContext = async (serviceBaseUrl, token) => {
     csrfToken: "",
     cookieHeader: ""
   };
+};
+
+const buildMoveApiCandidates = (baseUrl) => {
+  const cleanedBaseUrl = cleanUrl(baseUrl);
+
+  if (!cleanedBaseUrl) {
+    return [];
+  }
+
+  const candidates = [];
+
+  try {
+    let fixedUrl = cleanedBaseUrl;
+    if (fixedUrl.includes("integrationsuite")) {
+      fixedUrl = fixedUrl.replace("integrationsuite", "it-cpi001");
+    }
+
+    const fixed = new URL(fixedUrl);
+    candidates.push(`${fixed.origin}/api/v1`);
+
+    const original = new URL(cleanedBaseUrl);
+    candidates.push(`${original.origin}/api/v1`);
+  } catch {
+    // Ignore malformed URLs and let callers surface the original issue.
+  }
+
+  return [...new Set(candidates.map(cleanUrl).filter(Boolean))];
+};
+
+const getApiCsrfContext = async (serviceBaseUrl, token) => {
+  const candidatePaths = [
+    `${serviceBaseUrl}/`,
+    `${serviceBaseUrl}`,
+    `${serviceBaseUrl}/Queues?$top=1&$format=json`
+  ];
+  let lastError;
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      console.log(`[api-csrf] trying ${candidatePath}`);
+      const response = await axios.get(candidatePath, {
+        headers: {
+          ...tenantHeaders(token),
+          "x-csrf-token": "Fetch"
+        },
+        responseType: "text",
+        timeout: 30000
+      });
+
+      const csrfToken = response.headers["x-csrf-token"];
+      console.log(
+        `[api-csrf] response ${candidatePath} -> status=${response.status}, tokenPresent=${Boolean(csrfToken)}, cookiesPresent=${Boolean(response.headers["set-cookie"]?.length)}`
+      );
+
+      if (csrfToken) {
+        return {
+          csrfToken,
+          cookieHeader: extractCookieHeader(response.headers["set-cookie"])
+        };
+      }
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[api-csrf] failed ${candidatePath}: status=${error.response?.status || ""} content-type=${error.response?.headers?.["content-type"] || ""} body=${typeof error.response?.data === "string" ? error.response.data.slice(0, 300) : JSON.stringify(error.response?.data || error.message).slice(0, 300)}`
+      );
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  return {
+    csrfToken: "",
+    cookieHeader: ""
+  };
+};
+
+const moveJmsMessageDirect = async (baseUrl, token, sourceQueueName, targetQueueName, jmsMessageId) => {
+  const candidates = buildMoveApiCandidates(baseUrl);
+  const selector = `JMSMessageID='${jmsMessageId}'`;
+  let lastError;
+
+  for (const serviceBaseUrl of candidates) {
+    try {
+      const { csrfToken, cookieHeader } = await getApiCsrfContext(serviceBaseUrl, token);
+
+      if (!csrfToken) {
+        throw new Error(`Missing CSRF token from ${serviceBaseUrl}.`);
+      }
+
+      const queueResponse = await axios.get(
+        `${serviceBaseUrl}/Queues('${encodeODataKey(sourceQueueName)}')`,
+        {
+          headers: tenantHeaders(token),
+          params: { $format: "json" },
+          timeout: 30000
+        }
+      );
+
+      const queueEntity = queueResponse.data?.d || queueResponse.data || {};
+      const payload = {
+        ...(queueEntity && typeof queueEntity === "object" ? queueEntity : {})
+      };
+
+      console.log(`[move-direct] candidate=${serviceBaseUrl}`);
+      console.log(`[move-direct] csrfPresent=${Boolean(csrfToken)} cookiePresent=${Boolean(cookieHeader)}`);
+
+      await axios.request({
+        method: "PATCH",
+        url:
+          `${serviceBaseUrl}/Queues('${encodeODataKey(sourceQueueName)}')` +
+          `?operation=move&target_queue=${encodeURIComponent(targetQueueName)}` +
+          `&selector=${encodeURIComponent(selector)}`,
+        data: payload,
+        headers: {
+          ...tenantHeaders(token),
+          "x-csrf-token": csrfToken,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          "Content-Type": "application/json"
+        },
+        timeout: 30000
+      });
+
+      console.log(`[move-direct] success for ${jmsMessageId} on ${serviceBaseUrl}`);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `moveJmsMessageDirect failed for ${jmsMessageId} from ${sourceQueueName} to ${targetQueueName} on ${serviceBaseUrl}:`,
+        error.response?.data || error.message
+      );
+    }
+  }
+
+  throw lastError || new Error("Failed to move JMS message directly.");
 };
 
 const getODataJmsMessageEntity = async (serviceBaseUrl, token, sourceQueueName, jmsMessageId, failed) => {
@@ -1307,6 +1498,11 @@ const moveJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, targetQue
         csrfToken
       });
 
+      console.log(`[move-batch] candidate=${serviceBaseUrl}`);
+      console.log(`[move-batch] boundary=${batchBoundary}`);
+      console.log(`[move-batch] cookiePresent=${Boolean(cookieHeader)} csrfPresent=${Boolean(csrfToken)}`);
+      console.log(`[move-batch] body:\n${formatBodyWithLineNumbers(body)}`);
+
       const response = await axios.post(`${serviceBaseUrl}/$batch`, body, {
         headers: {
           ...tenantHeaders(token),
@@ -1320,6 +1516,8 @@ const moveJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, targetQue
       });
 
       const batchText = String(response.data || "");
+      console.log(`[move-batch] response status=${response.status}`);
+      console.log(`[move-batch] response body:\n${batchText.slice(0, 2000)}`);
       if (/HTTP\/1\.1 4\d\d/i.test(batchText) || /HTTP\/1\.1 5\d\d/i.test(batchText) || /Internal Server Error/i.test(batchText)) {
         const error = new Error("Tenant batch move operation failed.");
         error.response = {
@@ -1385,6 +1583,11 @@ const retryJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, jmsMessa
         csrfToken
       });
 
+      console.log(`[retry-batch] candidate=${serviceBaseUrl}`);
+      console.log(`[retry-batch] boundary=${batchBoundary}`);
+      console.log(`[retry-batch] cookiePresent=${Boolean(cookieHeader)} csrfPresent=${Boolean(csrfToken)}`);
+      console.log(`[retry-batch] body:\n${formatBodyWithLineNumbers(body)}`);
+
       const response = await axios.post(`${serviceBaseUrl}/$batch`, body, {
         headers: {
           ...tenantHeaders(token),
@@ -1398,6 +1601,8 @@ const retryJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, jmsMessa
       });
 
       const batchText = String(response.data || "");
+      console.log(`[retry-batch] response status=${response.status}`);
+      console.log(`[retry-batch] response body:\n${batchText.slice(0, 2000)}`);
       if (/Internal Server Error/i.test(batchText) || /Error during operation retry or queue config change operation/i.test(batchText)) {
         const error = new Error("Error during operation retry or queue config change operation");
         error.response = {
