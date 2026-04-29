@@ -1198,7 +1198,6 @@ const getODataCsrfContext = async (serviceBaseUrl, token) => {
 
   for (const candidatePath of candidatePaths) {
     try {
-      console.log(`[csrf] trying ${candidatePath}`);
       const response = await axios.get(candidatePath, {
         headers: {
           ...tenantHeaders(token),
@@ -1209,19 +1208,12 @@ const getODataCsrfContext = async (serviceBaseUrl, token) => {
       });
 
       const csrfToken = response.headers["x-csrf-token"];
-      console.log(
-        `[csrf] response ${candidatePath} -> status=${response.status}, tokenPresent=${Boolean(csrfToken)}, cookiesPresent=${Boolean(response.headers["set-cookie"]?.length)}`
-      );
       if (csrfToken) {
         return {
           csrfToken,
           cookieHeader: extractCookieHeader(response.headers["set-cookie"])
         };
       }
-
-      console.log(
-        `[csrf] no token from ${candidatePath}; content-type=${response.headers["content-type"] || ""}; bodySnippet=${String(response.data || "").slice(0, 200)}`
-      );
     } catch (error) {
       lastError = error;
       console.warn(
@@ -1277,7 +1269,6 @@ const getApiCsrfContext = async (serviceBaseUrl, token) => {
 
   for (const candidatePath of candidatePaths) {
     try {
-      console.log(`[api-csrf] trying ${candidatePath}`);
       const response = await axios.get(candidatePath, {
         headers: {
           ...tenantHeaders(token),
@@ -1288,9 +1279,6 @@ const getApiCsrfContext = async (serviceBaseUrl, token) => {
       });
 
       const csrfToken = response.headers["x-csrf-token"];
-      console.log(
-        `[api-csrf] response ${candidatePath} -> status=${response.status}, tokenPresent=${Boolean(csrfToken)}, cookiesPresent=${Boolean(response.headers["set-cookie"]?.length)}`
-      );
 
       if (csrfToken) {
         return {
@@ -1343,7 +1331,6 @@ const moveJmsMessageDirect = async (baseUrl, token, sourceQueueName, targetQueue
         ...(queueEntity && typeof queueEntity === "object" ? queueEntity : {})
       };
 
-      console.log(`[move-direct] candidate=${serviceBaseUrl}`);
       console.log(`[move-direct] csrfPresent=${Boolean(csrfToken)} cookiePresent=${Boolean(cookieHeader)}`);
 
       await axios.request({
@@ -1498,11 +1485,6 @@ const moveJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, targetQue
         csrfToken
       });
 
-      console.log(`[move-batch] candidate=${serviceBaseUrl}`);
-      console.log(`[move-batch] boundary=${batchBoundary}`);
-      console.log(`[move-batch] cookiePresent=${Boolean(cookieHeader)} csrfPresent=${Boolean(csrfToken)}`);
-      console.log(`[move-batch] body:\n${formatBodyWithLineNumbers(body)}`);
-
       const response = await axios.post(`${serviceBaseUrl}/$batch`, body, {
         headers: {
           ...tenantHeaders(token),
@@ -1516,8 +1498,6 @@ const moveJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, targetQue
       });
 
       const batchText = String(response.data || "");
-      console.log(`[move-batch] response status=${response.status}`);
-      console.log(`[move-batch] response body:\n${batchText.slice(0, 2000)}`);
       if (/HTTP\/1\.1 4\d\d/i.test(batchText) || /HTTP\/1\.1 5\d\d/i.test(batchText) || /Internal Server Error/i.test(batchText)) {
         const error = new Error("Tenant batch move operation failed.");
         error.response = {
@@ -1583,11 +1563,6 @@ const retryJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, jmsMessa
         csrfToken
       });
 
-      console.log(`[retry-batch] candidate=${serviceBaseUrl}`);
-      console.log(`[retry-batch] boundary=${batchBoundary}`);
-      console.log(`[retry-batch] cookiePresent=${Boolean(cookieHeader)} csrfPresent=${Boolean(csrfToken)}`);
-      console.log(`[retry-batch] body:\n${formatBodyWithLineNumbers(body)}`);
-
       const response = await axios.post(`${serviceBaseUrl}/$batch`, body, {
         headers: {
           ...tenantHeaders(token),
@@ -1601,8 +1576,6 @@ const retryJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, jmsMessa
       });
 
       const batchText = String(response.data || "");
-      console.log(`[retry-batch] response status=${response.status}`);
-      console.log(`[retry-batch] response body:\n${batchText.slice(0, 2000)}`);
       if (/Internal Server Error/i.test(batchText) || /Error during operation retry or queue config change operation/i.test(batchText)) {
         const error = new Error("Error during operation retry or queue config change operation");
         error.response = {

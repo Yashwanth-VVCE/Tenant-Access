@@ -1,17 +1,189 @@
 # Tenant Access Application
 
-Tenant Access Application is a full-stack SAP CPI monitoring tool with a React frontend and an Express backend. It lets a user sign in, connect to an SAP BTP / SAP CPI tenant with client credentials, browse integration packages and artifacts, trigger an iFlow, and review monitoring data stored in SAP HANA.
+Tenant Access Application is a full-stack SAP CPI monitoring and JMS queue management tool with a React frontend and an Express backend. It lets a user sign in, connect to an SAP BTP / SAP CPI tenant with client credentials, browse integration packages and artifacts, trigger an iFlow, review monitoring data stored in SAP HANA, and manage JMS message queues with move, retry, and delete operations.
 
 ## Business Flow
 
-1. User signs in to the web app.
-2. User enters tenant client credentials and CPI URLs.
-3. Backend validates the tenant connection and fetches CPI packages.
-4. User selects package, artifact, status, and time range.
-5. Backend triggers the CPI flow.
-6. CPI writes monitoring data into HANA.
-7. Frontend loads monitoring records from HANA through the backend.
-8. User can refresh data, inspect payloads, download payload files, export Excel, or send the Excel by email.
+### Phase 1: Authentication & Tenant Connection
+1. User signs in to the web app with hardcoded credentials.
+2. User navigates to the Tenant Access page and enters:
+   - Client ID and Client Secret (for OAuth)
+   - Token URL (SAP OAuth endpoint)
+   - Base URL (SAP CPI tenant URL)
+3. Backend validates the tenant connection by:
+   - Fetching an access token from the SAP OAuth endpoint
+   - Fetching integration packages from the CPI API
+   - Testing the tenant connection health
+
+### Phase 2: CPI Integration Monitoring (StatusOverview)
+4. User selects an integration package and its artifacts.
+5. Backend triggers the selected CPI flow and monitors execution.
+6. CPI writes monitoring data into SAP HANA database.
+7. Frontend loads monitoring records from HANA through the backend REST endpoints.
+8. User can:
+   - Refresh monitoring data
+   - Inspect message payloads (base64 decoded)
+   - Download individual payload files
+   - Export all payloads to Excel
+   - Send Excel reports via email (via SMTP)
+
+### Phase 3: JMS Queue Management (JmsQueues) [CURRENT ACTIVE STAGE]
+9. User navigates to JMS Queues page to manage failed or stuck messages.
+10. Backend fetches all available JMS queues from the CPI tenant.
+11. User selects a queue and views all messages with status, timestamps, and retry counts.
+12. User can perform the following operations on selected messages:
+    - **MOVE**: Transfer messages from source queue to target queue
+    - **RETRY**: Reprocess messages (changes message status to trigger reprocessing)
+    - **DELETE**: Remove messages from the queue permanently
+
+## Current Development Stage
+
+**Active Focus**: JMS Queue Management with Move, Retry, and Delete Operations
+- ✅ Tenant connection and authentication
+- ✅ CPI package and artifact browsing
+- ✅ CPI flow triggering
+- ✅ HANA monitoring data display
+- ✅ JMS queue fetching and message listing
+- ✅ Move operation (with dual-route support: direct API and batch operations)
+- ✅ Retry operation (message reprocessing via batch operations)
+- ✅ Delete operation (permanent message removal)
+- 🔄 Logging optimization (removing unnecessary console logs)
+
+## How Data Fetching Works
+
+### 1. Tenant Connection & OAuth
+- Frontend sends `POST /connectTenant` with client credentials
+- Backend exchanges credentials for OAuth access token
+- Token is stored in frontend localStorage for subsequent requests
+- Base URL is determined and validated with multiple candidates
+
+### 2. CPI Package & Artifact Discovery
+- `POST /getArtifacts` fetches all integration packages
+- Artifacts are fetched per package with retry logic (up to 8 attempts)
+- Results are cached for 5 minutes to reduce API load
+- Failed packages are logged but don't block the entire operation
+
+### 3. JMS Queue & Message Discovery
+- `POST /jms-queues` fetches all available message queues
+- `POST /jms-messages` fetches messages for a specific queue
+- Messages are enriched with additional metadata:
+  - Message ID, Status, Created/Due dates
+  - Retry counts, Next retry schedule
+  - Correlation IDs, iFlow names
+- Message status values: "Failed", "Available", "Waiting"
+
+### 4. CSRF Token Management
+- Secure operations (move/retry/delete) require CSRF tokens
+- `getApiCsrfContext()` fetches tokens with fallback candidates
+- Tokens are validated and included in request headers
+- Cookies are automatically extracted and sent with requests
+
+## How Move, Retry, and Delete Operations Work
+
+### MOVE Operation
+**Purpose**: Transfer a message from one queue to another (e.g., failed queue → retry queue)
+
+**Direct API Endpoint Format**:
+```
+PATCH /api/v1/Queues('<source-queue>')?operation=move&target_queue=<target-queue>&selector=<selector>
+```
+
+**Example Request URL**:
+```
+https://inccpidev.it-cpi001.cfapps.eu10.hana.ondemand.com/api/v1/Queues('JMS_Queue_100_DLQ')?operation=move&target_queue=JMS_Queue_100&selector=JMSMessageID='ID:10.147.158.688a3119dc16a96700:178'
+```
+
+Where:
+- `JMS_Queue_100_DLQ` = Source queue (dead letter queue)
+- `JMS_Queue_100` = Target queue (main processing queue)
+- `JMSMessageID='ID:10.147.158.688a3119dc16a96700:178'` = Selector to identify the specific message
+
+**Flow**:
+1. User selects message(s) and target queue
+2. Frontend calls `POST /jms-messages/move` with:
+   - Source queue name
+   - Target queue name
+   - Array of message IDs
+3. Backend tries **two routes** in sequence:
+   - **Direct API Route** (`moveJmsMessageDirect`):
+     - Constructs PATCH URL with OData key encoding:
+       - Queue names are URL-encoded: `encodeODataKey('JMS_Queue_100_DLQ')` 
+       - Selector uses JMSMessageID: `JMSMessageID='<message-id>'`
+       - Full URL: `/api/v1/Queues('<queue>')?operation=move&target_queue=<target>&selector=<selector>`
+     - Sends PATCH request with queue entity payload
+     - More efficient if supported
+   - **Batch Operation Route** (`moveJmsMessageViaBatch`):
+     - Falls back to SAP UI batch protocol
+     - Constructs multipart/mixed batch request
+     - Sends MERGE and GET operations together
+4. Backend logs operation:
+   ```
+   [move-direct] csrfPresent=true cookiePresent=true
+   [move-direct] success for ID:10.147.158.688a3119dc16a96700:178 on https://...
+   ```
+5. Success response: `{ message: "Messages moved successfully." }`
+
+**Error Handling**:
+- If direct route fails, automatically tries batch route
+- If both fail, returns descriptive error message
+- Authoritative errors (400, 401, 403, etc.) throw immediately
+- Retriable errors (429 rate limit, connection reset) retry with exponential backoff
+
+### RETRY Operation
+**Purpose**: Reprocess a failed message by changing its status back to "Available"
+
+**Flow**:
+1. User selects failed message(s) from a queue
+2. Frontend calls `POST /jms-messages/retry` with:
+   - Source queue name
+   - Array of message IDs (with failed=true flag)
+3. Backend attempts:
+   - **Batch Operation Route** (`retryJmsMessageViaBatch`):
+     - Fetches current message entity with all metadata
+     - Sends MERGE request via batch API to update message
+     - Triggers reprocessing workflow
+   - **Fallback Route** (if batch fails):
+     - Uses MERGE operation on `/api/v1/JmsMessages(...)` endpoint
+     - Includes DataServiceVersion headers
+4. Backend logs operation:
+   ```
+   [retry-batch] candidate=https://...
+   [retry-batch] csrfPresent=true cookiePresent=true
+   [retry-batch] body: [multipart batch request]
+   [retry-batch] response status=200
+   ```
+5. Success response: `{ message: "Messages retried successfully." }`
+
+**Important Note**: Retry operation may check error conditions:
+- If "Error during operation retry or queue config change operation" occurs, it's caught and reported
+- Message must be in Failed or specific states to be eligible for retry
+- iFlow configuration must support retry capability
+
+### DELETE Operation
+**Purpose**: Permanently remove a message from the queue
+
+**Flow**:
+1. User selects message(s) to delete
+2. Frontend calls `POST /jms-messages/delete` with:
+   - Source queue name
+   - Array of message IDs (with failed flag)
+3. Backend processes deletion:
+   - Constructs OData key: `JmsMessages(Msgid='xxx', Name='queue', Failed=false)`
+   - Sends HTTP DELETE request to `/api/v1/JmsMessages(...)`
+   - Includes required headers:
+     - Authorization Bearer token
+     - DataServiceVersion: 2.0
+     - X-Requested-With: XMLHttpRequest
+4. Backend logs deletion:
+   ```
+   [delete] Message xxx deleted from queue 'queue_name'
+   ```
+5. Success response: `{ message: "Messages deleted successfully." }`
+
+**Safety Features**:
+- Requires authorization token (OAuth)
+- Messages are immediately deleted from backend (cannot be recovered)
+- User confirmation should be implemented on frontend (optional)
 
 ## Current Stack
 
@@ -351,6 +523,253 @@ Request body:
 
 Returns all payload files as a zip archive.
 
+## JMS Queue Management API
+
+### `POST /jms-queues`
+
+Fetches all available JMS message queues from the CPI tenant.
+
+Request body:
+
+```json
+{
+  "token": "<tenant-access-token>",
+  "baseUrl": "https://<tenant>.it-cpi001.cfapps.<region>.hana.ondemand.com"
+}
+```
+
+Response:
+```json
+{
+  "queues": [
+    {
+      "id": "queue-unique-id",
+      "key": "queue-unique-id",
+      "name": "ErrorQueue",
+      "accessType": "Exclusive",
+      "usage": "OK",
+      "state": "Started",
+      "entries": 42
+    }
+  ]
+}
+```
+
+Queue statuses:
+- `usage`: "OK" (queue is active) or "Stopped"
+- `state`: "Started" or "Stopped"
+- `accessType`: "Exclusive" or "Non-Exclusive"
+- `entries`: Number of messages in the queue
+
+### `POST /jms-messages`
+
+Fetches all messages in a specific queue.
+
+Request body:
+
+```json
+{
+  "token": "<tenant-access-token>",
+  "baseUrl": "https://<tenant>.it-cpi001.cfapps.<region>.hana.ondemand.com",
+  "queueName": "ErrorQueue",
+  "queueKey": "queue-unique-id"
+}
+```
+
+Response:
+```json
+{
+  "messages": [
+    {
+      "id": "unique-message-id-1",
+      "jmsMessageId": "JMS-MSG-123",
+      "messageId": "MSG-CORRELATION-ID",
+      "status": "Failed",
+      "dueAt": "2026-04-29 14:30:00",
+      "createdAt": "2026-04-28 10:15:00",
+      "retainUntil": "2026-05-15 10:15:00",
+      "retryCount": 3,
+      "nextRetryOn": "2026-04-29 15:00:00",
+      "correlationId": "SAP-CORRELATION-UUID",
+      "iflowName": "SendEmailFlow",
+      "packageName": "EmailIntegration"
+    }
+  ]
+}
+```
+
+Message status values:
+- `Failed`: Message processing failed (eligible for retry or move)
+- `Available`: Message is ready to be processed
+- `Waiting`: Message is waiting for next retry attempt
+
+### `POST /jms-messages/move`
+
+Moves selected messages from source queue to target queue.
+
+Request body:
+
+```json
+{
+  "token": "<tenant-access-token>",
+  "baseUrl": "https://<tenant>.it-cpi001.cfapps.<region>.hana.ondemand.com",
+  "sourceQueueName": "ErrorQueue",
+  "targetQueueName": "RetryQueue",
+  "messages": [
+    {
+      "jmsMessageId": "JMS-MSG-123",
+      "failed": true
+    },
+    {
+      "jmsMessageId": "JMS-MSG-124",
+      "failed": true
+    }
+  ]
+}
+```
+
+Response on success:
+```json
+{
+  "message": "Messages moved successfully."
+}
+```
+
+**How it works**:
+1. Frontend collects selected messages with their JMS message IDs
+2. Backend attempts move via direct API route first (more efficient)
+3. If direct route fails, backend falls back to batch operations
+4. Operations are performed in parallel for multiple messages
+5. Server logs show:
+   - `[move-direct] candidate=https://...`
+   - `[move-direct] csrfPresent=true cookiePresent=true`
+   - `[move-direct] success for ID:xxx`
+
+**Error handling**:
+- Returns `{ message: "Failed to move JMS messages.", detail: "..." }` on failure
+- Authoritative tenant errors (401, 403, etc.) abort immediately
+- Connection errors with retry logic automatically fall back to alternate routes
+
+### `POST /jms-messages/retry`
+
+Retries failed messages by changing their status back to "Available" for reprocessing.
+
+Request body:
+
+```json
+{
+  "token": "<tenant-access-token>",
+  "baseUrl": "https://<tenant>.it-cpi001.cfapps.<region>.hana.ondemand.com",
+  "sourceQueueName": "ErrorQueue",
+  "messages": [
+    {
+      "jmsMessageId": "JMS-MSG-123",
+      "failed": true
+    }
+  ]
+}
+```
+
+Response on success:
+```json
+{
+  "message": "Messages retried successfully."
+}
+```
+
+**How it works**:
+1. Frontend collects failed messages to retry
+2. Backend fetches current message entity with all metadata
+3. Backend sends MERGE request via batch API protocol to update the message
+4. Batch operation triggers message reprocessing in the CPI iFlow
+5. Server logs show:
+   - `[retry-batch] candidate=https://...`
+   - `[retry-batch] csrfPresent=true cookiePresent=true`
+   - `[retry-batch] boundary=...`
+   - `[retry-batch] response status=200`
+
+**Important notes**:
+- Message must be in "Failed" state to be eligible for retry
+- iFlow configuration must support retry capability
+- Retry resets internal counters and triggers reprocessing
+- Failed messages continue to consume queue resources until retried or deleted
+
+**Error handling**:
+- Checks for "Error during operation retry or queue config change operation"
+- Returns descriptive error if queue doesn't support retry operations
+- Falls back to direct API MERGE if batch operations fail
+
+### `POST /jms-messages/delete`
+
+Permanently deletes selected messages from the queue.
+
+Request body:
+
+```json
+{
+  "token": "<tenant-access-token>",
+  "baseUrl": "https://<tenant>.it-cpi001.cfapps.<region>.hana.ondemand.com",
+  "sourceQueueName": "ErrorQueue",
+  "messages": [
+    {
+      "jmsMessageId": "JMS-MSG-123",
+      "failed": true
+    }
+  ]
+}
+```
+
+Response on success:
+```json
+{
+  "message": "Messages deleted successfully."
+}
+```
+
+**How it works**:
+1. Frontend collects messages to delete
+2. Backend constructs OData entity key: `JmsMessages(Msgid='xxx', Name='queuename', Failed=true)`
+3. Backend sends HTTP DELETE request to `/api/v1/JmsMessages(...)`
+4. Message is immediately removed from queue
+5. Messages cannot be recovered after deletion
+
+**Warning**:
+- **This operation is permanent** - deleted messages cannot be recovered
+- Consider implementing user confirmation dialog on frontend before deletion
+- Messages are deleted immediately without audit trail
+
+**Error handling**:
+- Returns `{ message: "Failed to delete JMS messages.", detail: "..." }` on failure
+- Authoritative errors abort immediately
+- Connection errors retry with alternate URL candidates
+
+### `POST /jms-resource-details`
+
+Fetches detailed information about JMS broker resource (memory, status, etc.).
+
+Request body:
+
+```json
+{
+  "token": "<tenant-access-token>",
+  "baseUrl": "https://<tenant>.it-cpi001.cfapps.<region>.hana.ondemand.com",
+  "brokerKey": "Broker1"
+}
+```
+
+Response:
+```json
+{
+  "resource": {
+    "id": "Broker1",
+    "name": "Message Broker",
+    "status": "Running",
+    "memoryUsage": "512 MB",
+    "totalMemory": "1024 MB"
+  }
+}
+```
+
 ### Debug Endpoints
 
 - `POST /cpi-data`
@@ -531,11 +950,28 @@ For a successful deployment, these values must stay aligned:
 3. Open the tenant access page.
 4. Enter tenant `clientId`, `clientSecret`, `tokenUrl`, and `baseUrl`.
 5. Connect the tenant.
-6. Open the status page.
-7. Select package, artifact, status, and time range.
-8. Trigger CPI.
-9. Refresh monitoring data.
-10. Download payloads or export Excel if needed.
+6. Navigate to JMS Queues page to test move/retry/delete operations:
+   - Select a queue from the list
+   - View messages and their statuses
+   - Select failed messages to test operations
+7. Test MOVE operation:
+   - Select messages from failed queue
+   - Choose target queue (e.g., RetryQueue)
+   - Click Move button
+   - Verify messages appear in target queue
+8. Test RETRY operation:
+   - Select failed messages in a queue
+   - Click Retry button
+   - Backend logs show success: `[move-direct] success for ID:xxx`
+   - Messages should be reprocessed if iFlow is running
+9. Test DELETE operation:
+   - Select messages to remove
+   - Click Delete button
+   - **Warning**: This is permanent - messages cannot be recovered
+10. Monitor logs:
+    - Server logs show `[move-direct] csrfPresent=true cookiePresent=true`
+    - On error: `console.warn` shows detailed error information
+    - No verbose request/response body logging (cleaned up)
 
 ## API Examples
 
