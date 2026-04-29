@@ -15,9 +15,6 @@ import CableRoundedIcon from "@mui/icons-material/CableRounded";
 import HubRoundedIcon from "@mui/icons-material/HubRounded";
 import VpnKeyRoundedIcon from "@mui/icons-material/VpnKeyRounded";
 import KeyRoundedIcon from "@mui/icons-material/KeyRounded";
-import ArrowForwardRoundedIcon from "@mui/icons-material/ArrowForwardRounded";
-import FormatListBulletedRoundedIcon from "@mui/icons-material/FormatListBulletedRounded";
-import MonitorHeartRoundedIcon from "@mui/icons-material/MonitorHeartRounded";
 
 import { useNavigate } from "react-router-dom";
 import TopBar from "../components/TopBar";
@@ -160,41 +157,54 @@ const TenantAccess = () => {
                 </Typography>
               </Stack>
 
-              <Stack direction={{ xs: "column", sm: "row" }} spacing={2.5}>
+              <Stack
+                direction={{ xs: "column", sm: "row" }}
+                spacing={2.5}
+                justifyContent="center"
+                alignItems="center"
+              >
                 <Button
-                  fullWidth
                   variant="contained"
-                  size="large"
-                  startIcon={<MonitorHeartRoundedIcon />}
-                  endIcon={<ArrowForwardRoundedIcon />}
+                  size="small"
                   onClick={() => navigate("/status")}
                   sx={{
-                    minHeight: 82,
-                    justifyContent: "space-between",
-                    px: 3,
-                    borderRadius: 2,
+                    minHeight: { xs: 118, sm: 156 },
+                    width: "100%",
+                    maxWidth: { xs: "100%", sm: 260 },
+                    justifyContent: "center",
+                    alignItems: "center",
+                    px: 2.5,
+                    py: 2,
+                    borderRadius: 3,
                     background: "#0b84d6",
-                    fontSize: 16,
-                    fontWeight: 800
+                    fontSize: 17,
+                    fontWeight: 800,
+                    textAlign: "center",
+                    lineHeight: 1.3,
+                    boxShadow: "0 14px 28px rgba(11, 132, 214, 0.18)"
                   }}
                 >
                   Message Monitoring Overview
                 </Button>
                 <Button
-                  fullWidth
                   variant="contained"
-                  size="large"
-                  startIcon={<FormatListBulletedRoundedIcon />}
-                  endIcon={<ArrowForwardRoundedIcon />}
+                  size="small"
                   onClick={() => navigate("/jms-queues")}
                   sx={{
-                    minHeight: 82,
-                    justifyContent: "space-between",
-                    px: 3,
-                    borderRadius: 2,
+                    minHeight: { xs: 118, sm: 156 },
+                    width: "100%",
+                    maxWidth: { xs: "100%", sm: 260 },
+                    justifyContent: "center",
+                    alignItems: "center",
+                    px: 2.5,
+                    py: 2,
+                    borderRadius: 3,
                     background: "#0b84d6",
-                    fontSize: 16,
-                    fontWeight: 800
+                    fontSize: 17,
+                    fontWeight: 800,
+                    textAlign: "center",
+                    lineHeight: 1.3,
+                    boxShadow: "0 14px 28px rgba(11, 132, 214, 0.18)"
                   }}
                 >
                   JMS Queues

@@ -318,6 +318,58 @@ const tenantHeaders = (token) => ({
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const createMultipartBoundary = (prefix) =>
+  `${prefix}_${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+
+const extractCookieHeader = (setCookieHeader) => {
+  if (!Array.isArray(setCookieHeader) || setCookieHeader.length === 0) {
+    return "";
+  }
+
+  return setCookieHeader
+    .map((entry) => String(entry).split(";")[0].trim())
+    .filter(Boolean)
+    .join("; ");
+};
+
+const isAuthoritativeTenantError = (error) => {
+  const status = Number(error?.response?.status || 0);
+  const code = String(error?.response?.data?.error?.code || "").trim().toLowerCase();
+
+  if (status === 400 || status === 401 || status === 403 || status === 405 || status === 409 || status === 501) {
+    return true;
+  }
+
+  return code === "not implemented";
+};
+
+const buildIntegrationSuiteODataCandidates = (baseUrl) => {
+  const cleanedBaseUrl = cleanUrl(baseUrl);
+
+  if (!cleanedBaseUrl) {
+    return [];
+  }
+
+  const candidates = [];
+
+  try {
+    const url = new URL(cleanedBaseUrl);
+    const hostnameParts = url.hostname.split(".");
+
+    if (hostnameParts.length > 2 && hostnameParts[1] !== "integrationsuite") {
+      const integrationSuiteParts = [...hostnameParts];
+      integrationSuiteParts[1] = "integrationsuite";
+      candidates.push(`${url.protocol}//${integrationSuiteParts.join(".")}/odata/api/v1`);
+    }
+
+    candidates.push(`${url.origin}/odata/api/v1`);
+  } catch {
+    // Ignore malformed URLs and let callers surface the original issue.
+  }
+
+  return [...new Set(candidates.map(cleanUrl).filter(Boolean))];
+};
+
 const fetchPackages = async (baseUrl, token) => {
     const candidates = buildBaseUrlCandidates(baseUrl);
     let lastError;
@@ -1014,6 +1066,16 @@ const enrichQueueMessages = async (baseUrl, token, messages) => {
 };
 
 const moveJmsMessage = async (baseUrl, token, sourceQueueName, targetQueueName, jmsMessageId, failed) => {
+  try {
+    await moveJmsMessageViaBatch(baseUrl, token, sourceQueueName, targetQueueName, jmsMessageId);
+    return;
+  } catch (batchError) {
+    console.warn(
+      `moveJmsMessage via SAP UI batch route failed for ${jmsMessageId} from ${sourceQueueName} to ${targetQueueName}:`,
+      batchError.response?.data || batchError.message
+    );
+  }
+
   const candidates = buildBaseUrlCandidates(baseUrl);
   const encodedMessageId = encodeODataKey(jmsMessageId);
   const encodedSourceQueue = encodeODataKey(sourceQueueName);
@@ -1043,10 +1105,430 @@ const moveJmsMessage = async (baseUrl, token, sourceQueueName, targetQueueName, 
         `moveJmsMessage failed for ${jmsMessageId} from ${sourceQueueName} to ${targetQueueName} on ${candidate}:`,
         error.response?.data || error.message
       );
+
+      if (isAuthoritativeTenantError(error)) {
+        throw error;
+      }
     }
   }
 
   throw lastError || new Error("Failed to move JMS message.");
+};
+
+const buildJmsMessageEntityPath = (sourceQueueName, jmsMessageId, failed) => {
+  const encodedMessageId = encodeODataKey(jmsMessageId);
+  const encodedSourceQueue = encodeODataKey(sourceQueueName);
+  return `/api/v1/JmsMessages(Msgid='${encodedMessageId}',Name='${encodedSourceQueue}',Failed=${failed ? "true" : "false"})`;
+};
+
+const getJmsMessageEntity = async (candidate, token, sourceQueueName, jmsMessageId, failed) => {
+  const entityPath = buildJmsMessageEntityPath(sourceQueueName, jmsMessageId, failed);
+  const response = await axios.get(`${candidate}${entityPath}`, {
+    headers: tenantHeaders(token),
+    params: {
+      $format: "json"
+    },
+    timeout: 30000
+  });
+
+  return {
+    entityPath,
+    entityUrl: `${candidate}${entityPath}`,
+    entity: response.data?.d || response.data
+  };
+};
+
+const buildODataJmsMessageEntityPath = (sourceQueueName, jmsMessageId, failed) => {
+  const encodedMessageId = encodeODataKey(jmsMessageId);
+  const encodedSourceQueue = encodeODataKey(sourceQueueName);
+  return `/JmsMessages(Msgid='${encodedMessageId}',Name='${encodedSourceQueue}',Failed=${failed ? "true" : "false"})`;
+};
+
+const getODataCsrfContext = async (serviceBaseUrl, token) => {
+  const candidatePaths = [
+    `${serviceBaseUrl}`,
+    `${serviceBaseUrl}/$metadata`,
+    `${serviceBaseUrl}/Queues?$top=1&$format=json`
+  ];
+  let lastError;
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      const response = await axios.get(candidatePath, {
+        headers: {
+          ...tenantHeaders(token),
+          "x-csrf-token": "Fetch"
+        },
+        responseType: "text",
+        timeout: 30000
+      });
+
+      const csrfToken = response.headers["x-csrf-token"];
+      if (csrfToken) {
+        return {
+          csrfToken,
+          cookieHeader: extractCookieHeader(response.headers["set-cookie"])
+        };
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  return {
+    csrfToken: "",
+    cookieHeader: ""
+  };
+};
+
+const getODataJmsMessageEntity = async (serviceBaseUrl, token, sourceQueueName, jmsMessageId, failed) => {
+  const entityPath = buildODataJmsMessageEntityPath(sourceQueueName, jmsMessageId, failed);
+  const response = await axios.get(`${serviceBaseUrl}${entityPath}`, {
+    headers: tenantHeaders(token),
+    params: {
+      $format: "json"
+    },
+    timeout: 30000
+  });
+
+  return {
+    entityPath,
+    entityUrl: `${serviceBaseUrl}${entityPath}`,
+    entity: response.data?.d || response.data
+  };
+};
+
+const buildRetryBatchBody = ({ entityPath, entityUrl, entityPayload, csrfToken }) => {
+  const batchBoundary = createMultipartBoundary("batch");
+  const changeSetBoundary = createMultipartBoundary("changeset");
+  const lines = [
+    `--${batchBoundary}`,
+    `Content-Type: multipart/mixed; boundary=${changeSetBoundary}`,
+    "",
+    `--${changeSetBoundary}`,
+    "Content-Type: application/http",
+    "Content-Transfer-Encoding: binary",
+    "",
+    `MERGE ${entityPath} HTTP/1.1`,
+    "sap-cancel-on-close: false",
+    "sap-contextid-accept: header",
+    "Accept: application/json",
+    `x-csrf-token: ${csrfToken}`,
+    "Accept-Language: en",
+    "DataServiceVersion: 2.0",
+    "MaxDataServiceVersion: 2.0",
+    "X-Requested-With: XMLHttpRequest",
+    "Content-Type: application/json",
+    `Content-Length: ${Buffer.byteLength(entityPayload, "utf8")}`,
+    "",
+    entityPayload,
+    `--${changeSetBoundary}--`,
+    `--${batchBoundary}--`,
+    ""
+  ];
+
+  return {
+    batchBoundary,
+    body: lines.join("\r\n")
+  };
+};
+
+const buildMoveBatchBody = ({ sourceQueueName, targetQueueName, jmsMessageId, csrfToken }) => {
+  const batchBoundary = createMultipartBoundary("batch");
+  const changeSetBoundary = createMultipartBoundary("changeset");
+  const selector = `JMSMessageID='${jmsMessageId}'`;
+  const movePath =
+    `Queues('${encodeODataKey(sourceQueueName)}')` +
+    `?operation=move&target_queue=${encodeURIComponent(targetQueueName)}` +
+    `&selector=${encodeURIComponent(selector)}`;
+  const lines = [
+    `--${batchBoundary}`,
+    `Content-Type: multipart/mixed; boundary=${changeSetBoundary}`,
+    "",
+    `--${changeSetBoundary}`,
+    "Content-Type: application/http",
+    "Content-Transfer-Encoding: binary",
+    "",
+    `MERGE ${movePath} HTTP/1.1`,
+    "sap-cancel-on-close: false",
+    "sap-contextid-accept: header",
+    "Accept: application/json",
+    "Accept-Language: en",
+    "DataServiceVersion: 2.0",
+    "MaxDataServiceVersion: 2.0",
+    "X-Requested-With: XMLHttpRequest",
+    `x-csrf-token: ${csrfToken}`,
+    "",
+    `--${changeSetBoundary}--`,
+    `--${batchBoundary}`,
+    "Content-Type: application/http",
+    "Content-Transfer-Encoding: binary",
+    "",
+    `GET Queues('${encodeODataKey(sourceQueueName)}')/Messages HTTP/1.1`,
+    "sap-cancel-on-close: true",
+    "sap-contextid-accept: header",
+    "Accept: application/json",
+    "x-csrf-token: " + csrfToken,
+    "Accept-Language: en",
+    "DataServiceVersion: 2.0",
+    "MaxDataServiceVersion: 2.0",
+    "X-Requested-With: XMLHttpRequest",
+    "",
+    `--${batchBoundary}--`,
+    ""
+  ];
+
+  return {
+    batchBoundary,
+    body: lines.join("\r\n")
+  };
+};
+
+const moveJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, targetQueueName, jmsMessageId) => {
+  const candidates = buildIntegrationSuiteODataCandidates(baseUrl);
+  let lastError;
+
+  for (const serviceBaseUrl of candidates) {
+    try {
+      const { csrfToken, cookieHeader } = await getODataCsrfContext(serviceBaseUrl, token);
+
+      if (!csrfToken) {
+        throw new Error(`Missing CSRF token from ${serviceBaseUrl}.`);
+      }
+
+      const { batchBoundary, body } = buildMoveBatchBody({
+        sourceQueueName,
+        targetQueueName,
+        jmsMessageId,
+        csrfToken
+      });
+
+      const response = await axios.post(`${serviceBaseUrl}/$batch`, body, {
+        headers: {
+          ...tenantHeaders(token),
+          "x-csrf-token": csrfToken,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          "Content-Type": `multipart/mixed; boundary=${batchBoundary}`
+        },
+        responseType: "text",
+        timeout: 30000,
+        transformResponse: [(value) => value]
+      });
+
+      const batchText = String(response.data || "");
+      if (/HTTP\/1\.1 4\d\d/i.test(batchText) || /HTTP\/1\.1 5\d\d/i.test(batchText) || /Internal Server Error/i.test(batchText)) {
+        const error = new Error("Tenant batch move operation failed.");
+        error.response = {
+          status: 500,
+          data: {
+            error: {
+              code: "Batch Move Failed",
+              message: {
+                lang: "en",
+                value: batchText
+              }
+            },
+            raw: batchText
+          }
+        };
+        throw error;
+      }
+
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `moveJmsMessageViaBatch failed for ${jmsMessageId} from ${sourceQueueName} to ${targetQueueName} on ${serviceBaseUrl}:`,
+        error.response?.data || error.message
+      );
+    }
+  }
+
+  throw lastError || new Error("Failed to move JMS message via batch.");
+};
+
+const retryJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, jmsMessageId, failed) => {
+  const candidates = buildIntegrationSuiteODataCandidates(baseUrl);
+  let lastError;
+
+  for (const serviceBaseUrl of candidates) {
+    try {
+      const { csrfToken, cookieHeader } = await getODataCsrfContext(serviceBaseUrl, token);
+
+      if (!csrfToken) {
+        throw new Error(`Missing CSRF token from ${serviceBaseUrl}.`);
+      }
+
+      const { entityPath, entityUrl, entity } = await getODataJmsMessageEntity(
+        serviceBaseUrl,
+        token,
+        sourceQueueName,
+        jmsMessageId,
+        failed
+      );
+
+      const entityPayload = JSON.stringify({
+        ...(entity && typeof entity === "object" ? entity : {}),
+        __metadata: {
+          ...(entity?.__metadata || {}),
+          uri: entityUrl
+        }
+      });
+      const { batchBoundary, body } = buildRetryBatchBody({
+        entityPath,
+        entityUrl,
+        entityPayload,
+        csrfToken
+      });
+
+      const response = await axios.post(`${serviceBaseUrl}/$batch`, body, {
+        headers: {
+          ...tenantHeaders(token),
+          "x-csrf-token": csrfToken,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          "Content-Type": `multipart/mixed; boundary=${batchBoundary}`
+        },
+        responseType: "text",
+        timeout: 30000,
+        transformResponse: [(value) => value]
+      });
+
+      const batchText = String(response.data || "");
+      if (/Internal Server Error/i.test(batchText) || /Error during operation retry or queue config change operation/i.test(batchText)) {
+        const error = new Error("Error during operation retry or queue config change operation");
+        error.response = {
+          status: 500,
+          data: {
+            error: {
+              code: "Internal Server Error",
+              message: {
+                lang: "en",
+                value: "Error during operation retry or queue config change operation"
+              }
+            },
+            raw: batchText
+          }
+        };
+        throw error;
+      }
+
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `retryJmsMessageViaBatch failed for ${jmsMessageId} in ${sourceQueueName} on ${serviceBaseUrl}:`,
+        error.response?.data || error.message
+      );
+    }
+  }
+
+  throw lastError || new Error("Failed to retry JMS message via batch.");
+};
+
+const retryJmsMessage = async (baseUrl, token, sourceQueueName, jmsMessageId, failed) => {
+  try {
+    await retryJmsMessageViaBatch(baseUrl, token, sourceQueueName, jmsMessageId, failed);
+  } catch (batchError) {
+    console.warn(
+      `retryJmsMessage via SAP UI batch route failed for ${jmsMessageId} in ${sourceQueueName}:`,
+      batchError.response?.data || batchError.message
+    );
+
+    const candidates = buildBaseUrlCandidates(baseUrl);
+    let lastError = batchError;
+
+    for (const candidate of candidates) {
+      try {
+        const { entityUrl, entity } = await getJmsMessageEntity(
+          candidate,
+          token,
+          sourceQueueName,
+          jmsMessageId,
+          failed
+        );
+
+        const mergePayload =
+          entity && typeof entity === "object"
+            ? {
+                ...entity,
+                __metadata: {
+                  ...(entity.__metadata || {}),
+                  uri: entityUrl
+                }
+              }
+            : {
+                __metadata: { uri: entityUrl }
+              };
+
+        await axios.request({
+          method: "MERGE",
+          url: entityUrl,
+          data: mergePayload,
+          headers: {
+            ...tenantHeaders(token),
+            "Content-Type": "application/json",
+            "DataServiceVersion": "2.0",
+            "MaxDataServiceVersion": "2.0",
+            "X-Requested-With": "XMLHttpRequest"
+          },
+          timeout: 30000
+        });
+
+        return;
+      } catch (error) {
+        lastError = error;
+        console.warn(
+          `retryJmsMessage failed for ${jmsMessageId} in ${sourceQueueName} on ${candidate}:`,
+          error.response?.data || error.message
+        );
+
+        if (isAuthoritativeTenantError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError || new Error("Failed to retry JMS message.");
+  }
+};
+
+const deleteJmsMessage = async (baseUrl, token, sourceQueueName, jmsMessageId, failed) => {
+  const candidates = buildBaseUrlCandidates(baseUrl);
+  let lastError;
+
+  for (const candidate of candidates) {
+    try {
+      const entityPath = buildJmsMessageEntityPath(sourceQueueName, jmsMessageId, failed);
+
+      await axios.delete(`${candidate}${entityPath}`, {
+        headers: {
+          ...tenantHeaders(token),
+          "DataServiceVersion": "2.0",
+          "MaxDataServiceVersion": "2.0",
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        timeout: 30000
+      });
+
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `deleteJmsMessage failed for ${jmsMessageId} in ${sourceQueueName} on ${candidate}:`,
+        error.response?.data || error.message
+      );
+
+      if (isAuthoritativeTenantError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error("Failed to delete JMS message.");
 };
 
 const getJmsQueueRecords = async (baseUrl, token) => {
@@ -1274,6 +1756,72 @@ app.post("/jms-messages/move", async (req, res) => {
     console.error("jms-messages/move error:", error.response?.data || error.message);
     return res.status(500).json({
       message: "Failed to move JMS messages.",
+      detail: error.response?.data || error.message
+    });
+  }
+});
+
+app.post("/jms-messages/retry", async (req, res) => {
+  let { token, baseUrl, sourceQueueName, messages } = req.body || {};
+  baseUrl = cleanUrl(baseUrl);
+
+  if (!token || !baseUrl || !sourceQueueName || !Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({
+      message: "token, baseUrl, sourceQueueName, and messages are required."
+    });
+  }
+
+  try {
+    await Promise.all(
+      messages.map((message) =>
+        retryJmsMessage(
+          baseUrl,
+          token,
+          sourceQueueName,
+          message.jmsMessageId,
+          Boolean(message.failed)
+        )
+      )
+    );
+
+    return res.json({ message: "Messages retried successfully." });
+  } catch (error) {
+    console.error("jms-messages/retry error:", error.response?.data || error.message);
+    return res.status(500).json({
+      message: "Failed to retry JMS messages.",
+      detail: error.response?.data || error.message
+    });
+  }
+});
+
+app.post("/jms-messages/delete", async (req, res) => {
+  let { token, baseUrl, sourceQueueName, messages } = req.body || {};
+  baseUrl = cleanUrl(baseUrl);
+
+  if (!token || !baseUrl || !sourceQueueName || !Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({
+      message: "token, baseUrl, sourceQueueName, and messages are required."
+    });
+  }
+
+  try {
+    await Promise.all(
+      messages.map((message) =>
+        deleteJmsMessage(
+          baseUrl,
+          token,
+          sourceQueueName,
+          message.jmsMessageId,
+          Boolean(message.failed)
+        )
+      )
+    );
+
+    return res.json({ message: "Messages deleted successfully." });
+  } catch (error) {
+    console.error("jms-messages/delete error:", error.response?.data || error.message);
+    return res.status(500).json({
+      message: "Failed to delete JMS messages.",
       detail: error.response?.data || error.message
     });
   }

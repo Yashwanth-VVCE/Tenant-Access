@@ -21,6 +21,7 @@ import {
   DialogTitle,
   IconButton,
   InputAdornment,
+  Menu,
   MenuItem,
   Paper,
   Stack,
@@ -86,9 +87,16 @@ const JmsQueues = () => {
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [targetQueueName, setTargetQueueName] = useState("");
   const [moveLoading, setMoveLoading] = useState(false);
+  const [retryLoading, setRetryLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteConfirmationText, setDeleteConfirmationText] = useState("");
   const [resourceDetails, setResourceDetails] = useState(null);
   const [resourceLoading, setResourceLoading] = useState(false);
   const [resourceDialogOpen, setResourceDialogOpen] = useState(false);
+  const [queueActionsAnchorEl, setQueueActionsAnchorEl] = useState(null);
+  const [queueActionsTarget, setQueueActionsTarget] = useState(null);
+  const [messageActionsAnchorEl, setMessageActionsAnchorEl] = useState(null);
 
   const filteredQueues = useMemo(() => {
     const normalizedFilter = queueFilter.trim().toLowerCase();
@@ -158,6 +166,8 @@ const JmsQueues = () => {
     [messages, selectedMessageIds]
   );
 
+  const hasSelectedMessages = selectedMessages.length > 0;
+
   const startedQueuesCount = useMemo(
     () => queues.filter((queue) => queue.state === "Started").length,
     [queues]
@@ -193,13 +203,18 @@ const JmsQueues = () => {
     };
   }, [resourceDetails, startedQueuesCount, stoppedQueuesCount]);
 
-  const loadQueues = useCallback(async () => {
+  const loadQueues = useCallback(async (options = {}) => {
+    const { preserveSelection = false } = options;
+
     setQueuesLoading(true);
     setError("");
-    setMessages([]);
-    setSelectedQueue("");
-    setSelectedMessageIds([]);
-    setSelectionMode(false);
+
+    if (!preserveSelection) {
+      setMessages([]);
+      setSelectedQueue("");
+      setSelectedMessageIds([]);
+      setSelectionMode(false);
+    }
 
     try {
       const response = await fetch(`${API_BASE_URL}/jms-queues`, {
@@ -262,6 +277,11 @@ const JmsQueues = () => {
     setMoveDialogOpen(true);
   };
 
+  const selectedQueueRecord = useMemo(
+    () => queues.find((queue) => (queue.key || queue.name) === selectedQueue) || null,
+    [queues, selectedQueue]
+  );
+
   const closeMoveDialog = () => {
     if (moveLoading) {
       return;
@@ -302,15 +322,117 @@ const JmsQueues = () => {
       }
 
       closeMoveDialog();
+      await loadQueues({ preserveSelection: true });
+
       if (sourceQueue) {
         await loadMessages(sourceQueue);
       }
-      await loadQueues();
     } catch (moveError) {
       console.error("failed to move JMS messages", moveError);
       setError(moveError.message || "Failed to move JMS messages.");
     } finally {
       setMoveLoading(false);
+    }
+  };
+
+  const refreshCurrentQueue = useCallback(async () => {
+    await loadQueues({ preserveSelection: true });
+
+    if (selectedQueueRecord) {
+      await loadMessages(selectedQueueRecord);
+    }
+  }, [loadMessages, loadQueues, selectedQueueRecord]);
+
+  const handleRetryMessages = async () => {
+    if (!selectedQueueRecord || selectedMessages.length === 0) {
+      return;
+    }
+
+    setRetryLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/jms-messages/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token,
+          baseUrl,
+          sourceQueueName: selectedQueueRecord.name,
+          messages: selectedMessages.map((message) => ({
+            jmsMessageId: message.jmsMessageId,
+            failed: message.failed
+          }))
+        })
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(getErrorDetail(data, "Failed to retry JMS messages."));
+      }
+
+      await refreshCurrentQueue();
+    } catch (retryError) {
+      console.error("failed to retry JMS messages", retryError);
+      setError(retryError.message || "Failed to retry JMS messages.");
+    } finally {
+      setRetryLoading(false);
+    }
+  };
+
+  const openDeleteDialog = () => {
+    if (!selectedQueueRecord || selectedMessages.length === 0) {
+      return;
+    }
+
+    setDeleteConfirmationText("");
+    setDeleteDialogOpen(true);
+  };
+
+  const closeDeleteDialog = () => {
+    if (deleteLoading) {
+      return;
+    }
+
+    setDeleteDialogOpen(false);
+    setDeleteConfirmationText("");
+  };
+
+  const handleDeleteMessages = async () => {
+    if (!selectedQueueRecord || selectedMessages.length === 0) {
+      return;
+    }
+
+    setDeleteLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/jms-messages/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token,
+          baseUrl,
+          sourceQueueName: selectedQueueRecord.name,
+          messages: selectedMessages.map((message) => ({
+            jmsMessageId: message.jmsMessageId,
+            failed: message.failed
+          }))
+        })
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(getErrorDetail(data, "Failed to delete JMS messages."));
+      }
+
+      closeDeleteDialog();
+      await refreshCurrentQueue();
+    } catch (deleteError) {
+      console.error("failed to delete JMS messages", deleteError);
+      setError(deleteError.message || "Failed to delete JMS messages.");
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -341,6 +463,38 @@ const JmsQueues = () => {
     } finally {
       setResourceLoading(false);
     }
+  };
+
+  const openQueueDetails = () => {
+    setShowQueueDetails(true);
+
+    if (!resourceLoading) {
+      void loadJmsResourceDetails();
+    }
+  };
+
+  const openQueueActionsMenu = (event, queue) => {
+    event.stopPropagation();
+    setQueueActionsAnchorEl(event.currentTarget);
+    setQueueActionsTarget(queue);
+  };
+
+  const closeQueueActionsMenu = () => {
+    setQueueActionsAnchorEl(null);
+    setQueueActionsTarget(null);
+  };
+
+  const openMessageActionsMenu = (event) => {
+    setMessageActionsAnchorEl(event.currentTarget);
+  };
+
+  const closeMessageActionsMenu = () => {
+    setMessageActionsAnchorEl(null);
+  };
+
+  const reloadCurrentSelection = async () => {
+    closeMessageActionsMenu();
+    await refreshCurrentQueue();
   };
 
   useEffect(() => {
@@ -417,7 +571,7 @@ const JmsQueues = () => {
           >
             <Button
               fullWidth
-              onClick={() => setShowQueueDetails(true)}
+              onClick={openQueueDetails}
               disabled={queuesLoading || queues.length === 0}
               sx={{
                 minHeight: 196,
@@ -507,19 +661,9 @@ const JmsQueues = () => {
                     <Typography variant="h5" fontWeight={800}>
                       Queues ({queues.length})
                     </Typography>
-                    <Stack direction="row" spacing={0.5} alignItems="center">
-                      <Button
-                        variant="text"
-                        onClick={loadJmsResourceDetails}
-                        disabled={resourceLoading}
-                        sx={{ textTransform: "none", fontWeight: 700, color: "#0b63ce", minWidth: 0 }}
-                      >
-                        {resourceLoading ? "Checking..." : "Check"}
-                      </Button>
-                      <IconButton size="small">
-                        <MoreHorizRoundedIcon />
-                      </IconButton>
-                    </Stack>
+                    <IconButton size="small">
+                      <MoreHorizRoundedIcon />
+                    </IconButton>
                   </Stack>
                   <TextField
                     size="small"
@@ -603,7 +747,10 @@ const JmsQueues = () => {
                             </Stack>
                           </Box>
                           <Stack direction="row" spacing={0.5} alignItems="center">
-                            <IconButton size="small">
+                            <IconButton
+                              size="small"
+                              onClick={(event) => openQueueActionsMenu(event, queue)}
+                            >
                               <MoreHorizRoundedIcon fontSize="small" />
                             </IconButton>
                             <IconButton size="small" onClick={() => loadMessages(queue)}>
@@ -664,32 +811,34 @@ const JmsQueues = () => {
                     <Button
                       variant="text"
                       startIcon={<DriveFileMoveOutlinedIcon />}
-                      disabled={!selectionMode || selectedMessageIds.length === 0}
+                      disabled={!selectionMode || !hasSelectedMessages || moveLoading || retryLoading || deleteLoading}
                       onClick={openMoveDialog}
                       sx={{ textTransform: "none", fontWeight: 600, color: "#91b8ee" }}
                     >
-                      Move
+                      {moveLoading ? "Moving..." : "Move"}
                     </Button>
                     <Button
                       variant="text"
                       startIcon={<ReplayRoundedIcon />}
-                      disabled={!selectionMode || selectedMessageIds.length === 0}
+                      disabled={!selectionMode || !hasSelectedMessages || moveLoading || retryLoading || deleteLoading}
+                      onClick={handleRetryMessages}
                       sx={{ textTransform: "none", fontWeight: 600, color: "#91b8ee" }}
                     >
-                      Retry
+                      {retryLoading ? "Retrying..." : "Retry"}
                     </Button>
                     <Button
                       variant="text"
                       startIcon={<DeleteOutlineRoundedIcon />}
-                      disabled={!selectionMode || selectedMessageIds.length === 0}
+                      disabled={!selectionMode || !hasSelectedMessages || deleteLoading}
+                      onClick={openDeleteDialog}
                       sx={{ textTransform: "none", fontWeight: 600, color: "#91b8ee" }}
                     >
-                      Delete
+                      {deleteLoading ? "Deleting..." : "Delete"}
                     </Button>
                     <IconButton size="small" sx={{ color: selectionMode ? "#0b63ce" : "#5f7fa5" }} onClick={toggleSelectionMode}>
                       <FormatListBulletedRoundedIcon />
                     </IconButton>
-                    <IconButton size="small" sx={{ color: "#0b63ce" }}>
+                    <IconButton size="small" sx={{ color: "#0b63ce" }} onClick={openMessageActionsMenu}>
                       <MoreHorizRoundedIcon />
                     </IconButton>
                     {messagesLoading && <CircularProgress size={22} />}
@@ -835,6 +984,128 @@ const JmsQueues = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Dialog open={deleteDialogOpen} onClose={closeDeleteDialog} fullWidth maxWidth="sm">
+        <DialogTitle sx={{ fontWeight: 700 }}>Delete Messages</DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Stack spacing={2}>
+            <Typography sx={{ color: "#24364d", lineHeight: 1.5 }}>
+              Are you sure you want to delete {selectedMessages.length} selected message{selectedMessages.length === 1 ? "" : "s"} from the{" "}
+              "{selectedQueueRecord?.name || selectedQueue}" queue?
+            </Typography>
+            <Typography sx={{ color: "#4f6b8a", lineHeight: 1.5 }}>
+              This action removes the selected message{selectedMessages.length === 1 ? "" : "s"} from the tenant queue.
+            </Typography>
+            <Typography sx={{ color: "#24364d", fontWeight: 600 }}>
+              Type DELETE to confirm
+            </Typography>
+            <TextField
+              value={deleteConfirmationText}
+              onChange={(event) => setDeleteConfirmationText(event.target.value)}
+              fullWidth
+              autoFocus
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button onClick={closeDeleteDialog} disabled={deleteLoading}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleDeleteMessages}
+            disabled={deleteLoading || deleteConfirmationText.trim().toUpperCase() !== "DELETE"}
+          >
+            {deleteLoading ? "Deleting..." : "Delete"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Menu
+        anchorEl={queueActionsAnchorEl}
+        open={Boolean(queueActionsAnchorEl)}
+        onClose={closeQueueActionsMenu}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{
+          paper: {
+            sx: {
+              mt: 0.5,
+              minWidth: 148,
+              borderRadius: 2,
+              border: "1px solid #d7dee8",
+              boxShadow: "0 16px 32px rgba(15, 23, 42, 0.14)"
+            }
+          }
+        }}
+      >
+        <MenuItem
+          onClick={() => {
+            closeQueueActionsMenu();
+            if (queueActionsTarget) {
+              setSelectedQueue(queueActionsTarget.key || queueActionsTarget.name);
+            }
+          }}
+        >
+          Retry
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (queueActionsTarget) {
+              setSelectedQueue(queueActionsTarget.key || queueActionsTarget.name);
+            }
+            closeQueueActionsMenu();
+          }}
+        >
+          Move
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (queueActionsTarget) {
+              setSelectedQueue(queueActionsTarget.key || queueActionsTarget.name);
+            }
+            closeQueueActionsMenu();
+            if (!resourceDetails && !resourceLoading) {
+              void loadJmsResourceDetails();
+            }
+            setResourceDialogOpen(true);
+          }}
+        >
+          Usage
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            if (queueActionsTarget) {
+              setSelectedQueue(queueActionsTarget.key || queueActionsTarget.name);
+            }
+            closeQueueActionsMenu();
+          }}
+        >
+          Delete
+        </MenuItem>
+      </Menu>
+
+      <Menu
+        anchorEl={messageActionsAnchorEl}
+        open={Boolean(messageActionsAnchorEl)}
+        onClose={closeMessageActionsMenu}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{
+          paper: {
+            sx: {
+              mt: 0.5,
+              minWidth: 160,
+              borderRadius: 2,
+              border: "1px solid #d7dee8",
+              boxShadow: "0 16px 32px rgba(15, 23, 42, 0.14)"
+            }
+          }
+        }}
+      >
+        <MenuItem onClick={() => void reloadCurrentSelection()}>Reload</MenuItem>
+        <MenuItem onClick={closeMessageActionsMenu}>Settings</MenuItem>
+      </Menu>
 
       <Dialog
         open={resourceDialogOpen}
