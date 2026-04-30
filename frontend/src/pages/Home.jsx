@@ -22,10 +22,10 @@ function Home() {
             className="landing-logo"
           /> */}
           <h5 className="landing-title">
-            Welcome to
+            Welcome to Integration suite
           </h5>
           <h2 className="landing-title">
-            CPI Monitoring Overview
+            Monitoring Overview
           </h2>
           <button
             className="login-btn"

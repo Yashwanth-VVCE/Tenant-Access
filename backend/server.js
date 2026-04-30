@@ -8,7 +8,6 @@ const nodemailer = require("nodemailer");
 const archiver = require("archiver");
 const app = express();
 const hana = require("@sap/hana-client");
-
 app.use(cors());
 app.use(express.json({ limit: '10mb' })); 
 app.use(express.text({ type: "text/*" }));
@@ -1607,9 +1606,78 @@ const retryJmsMessageViaBatch = async (baseUrl, token, sourceQueueName, jmsMessa
   throw lastError || new Error("Failed to retry JMS message via batch.");
 };
 
+const retryJmsMessageDirect = async (baseUrl, token, sourceQueueName, jmsMessageId, failed) => {
+  const candidates = buildMoveApiCandidates(baseUrl);
+  const selector = `JMSMessageID='${jmsMessageId}'`;
+  let lastError;
+
+  for (const serviceBaseUrl of candidates) {
+    try {
+      const { csrfToken, cookieHeader } = await getApiCsrfContext(serviceBaseUrl, token);
+
+      if (!csrfToken) {
+        throw new Error(`Missing CSRF token from ${serviceBaseUrl}.`);
+      }
+
+      const queueResponse = await axios.get(
+        `${serviceBaseUrl}/Queues('${encodeODataKey(sourceQueueName)}')`,
+        {
+          headers: tenantHeaders(token),
+          params: { $format: "json" },
+          timeout: 30000
+        }
+      );
+
+      const queueEntity = queueResponse.data?.d || queueResponse.data || {};
+      const payload = {
+        ...(queueEntity && typeof queueEntity === "object" ? queueEntity : {})
+      };
+
+      console.log(`[retry-direct] csrfPresent=${Boolean(csrfToken)} cookiePresent=${Boolean(cookieHeader)}`);
+
+      await axios.request({
+        method: "PATCH",
+        url:
+          `${serviceBaseUrl}/Queues('${encodeODataKey(sourceQueueName)}')` +
+          `?operation=retry&selector=${encodeURIComponent(selector)}`,
+        data: payload,
+        headers: {
+          ...tenantHeaders(token),
+          "x-csrf-token": csrfToken,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          "Content-Type": "application/json"
+        },
+        timeout: 30000
+      });
+
+      console.log(`[retry-direct] success for ${jmsMessageId} on ${serviceBaseUrl}`);
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `retryJmsMessageDirect failed for ${jmsMessageId} in ${sourceQueueName} on ${serviceBaseUrl}:`,
+        error.response?.data || error.message
+      );
+    }
+  }
+
+  throw lastError || new Error("Failed to retry JMS message directly.");
+};
+
 const retryJmsMessage = async (baseUrl, token, sourceQueueName, jmsMessageId, failed) => {
   try {
+    await retryJmsMessageDirect(baseUrl, token, sourceQueueName, jmsMessageId, failed);
+    return;
+  } catch (directError) {
+    console.warn(
+      `retryJmsMessage direct API route failed for ${jmsMessageId} in ${sourceQueueName}:`,
+      directError.response?.data || directError.message
+    );
+  }
+
+  try {
     await retryJmsMessageViaBatch(baseUrl, token, sourceQueueName, jmsMessageId, failed);
+    return;
   } catch (batchError) {
     console.warn(
       `retryJmsMessage via SAP UI batch route failed for ${jmsMessageId} in ${sourceQueueName}:`,
@@ -1660,7 +1728,7 @@ const retryJmsMessage = async (baseUrl, token, sourceQueueName, jmsMessageId, fa
       } catch (error) {
         lastError = error;
         console.warn(
-          `retryJmsMessage failed for ${jmsMessageId} in ${sourceQueueName} on ${candidate}:`,
+          `retryJmsMessage MERGE failed for ${jmsMessageId} in ${sourceQueueName} on ${candidate}:`,
           error.response?.data || error.message
         );
 

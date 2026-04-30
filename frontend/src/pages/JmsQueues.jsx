@@ -168,6 +168,11 @@ const JmsQueues = () => {
 
   const hasSelectedMessages = selectedMessages.length > 0;
 
+  const hasWaitingMessages = useMemo(
+    () => selectedMessages.some((message) => message.status === "Waiting"),
+    [selectedMessages]
+  );
+
   const startedQueuesCount = useMemo(
     () => queues.filter((queue) => queue.state === "Started").length,
     [queues]
@@ -701,12 +706,18 @@ const JmsQueues = () => {
                     filteredQueues.map((queue) => (
                       <Box
                         key={queue.key || queue.name}
+                        onClick={() => loadMessages(queue)}
                         sx={{
                           px: 2.25,
                           py: 1.8,
                           bgcolor: selectedQueue === (queue.key || queue.name) ? "#edf6ff" : "#ffffff",
                           borderBottom: "1px solid #eef2f6",
-                          borderLeft: selectedQueue === (queue.key || queue.name) ? "3px solid #0b63ce" : "3px solid transparent"
+                          borderLeft: selectedQueue === (queue.key || queue.name) ? "3px solid #0b63ce" : "3px solid transparent",
+                          cursor: "pointer",
+                          transition: "all 0.2s ease",
+                          "&:hover": {
+                            bgcolor: "#f0f8ff"
+                          }
                         }}
                       >
                         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
@@ -753,7 +764,10 @@ const JmsQueues = () => {
                             >
                               <MoreHorizRoundedIcon fontSize="small" />
                             </IconButton>
-                            <IconButton size="small" onClick={() => loadMessages(queue)}>
+                            <IconButton size="small" onClick={(event) => {
+                              event.stopPropagation();
+                              loadMessages(queue);
+                            }}>
                               <ArrowForwardRoundedIcon fontSize="small" />
                             </IconButton>
                           </Stack>
@@ -813,16 +827,17 @@ const JmsQueues = () => {
                       startIcon={<DriveFileMoveOutlinedIcon />}
                       disabled={!selectionMode || !hasSelectedMessages || moveLoading || retryLoading || deleteLoading}
                       onClick={openMoveDialog}
-                      sx={{ textTransform: "none", fontWeight: 600, color: "#91b8ee" }}
+                      sx={{ textTransform: "none", fontWeight: 600, color: hasSelectedMessages ? "#0b63ce" : "#91b8ee" }}
                     >
                       {moveLoading ? "Moving..." : "Move"}
                     </Button>
                     <Button
                       variant="text"
                       startIcon={<ReplayRoundedIcon />}
-                      disabled={!selectionMode || !hasSelectedMessages || moveLoading || retryLoading || deleteLoading}
+                      disabled={!selectionMode || !hasSelectedMessages || moveLoading || retryLoading || deleteLoading || hasWaitingMessages}
                       onClick={handleRetryMessages}
-                      sx={{ textTransform: "none", fontWeight: 600, color: "#91b8ee" }}
+                      sx={{ textTransform: "none", fontWeight: 600, color: hasSelectedMessages && !hasWaitingMessages ? "#0b63ce" : "#91b8ee" }}
+                      title={hasWaitingMessages ? "Cannot retry messages with 'Waiting' status" : ""}
                     >
                       {retryLoading ? "Retrying..." : "Retry"}
                     </Button>
@@ -831,7 +846,7 @@ const JmsQueues = () => {
                       startIcon={<DeleteOutlineRoundedIcon />}
                       disabled={!selectionMode || !hasSelectedMessages || deleteLoading}
                       onClick={openDeleteDialog}
-                      sx={{ textTransform: "none", fontWeight: 600, color: "#91b8ee" }}
+                      sx={{ textTransform: "none", fontWeight: 600, color: hasSelectedMessages ? "#0b63ce" : "#91b8ee" }}
                     >
                       {deleteLoading ? "Deleting..." : "Delete"}
                     </Button>

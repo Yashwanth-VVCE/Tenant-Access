@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Box,
   Button,
@@ -8,7 +8,8 @@ import {
   TextField,
   Typography,
   Alert,
-  InputAdornment
+  InputAdornment,
+  CircularProgress
 } from "@mui/material";
 
 import CableRoundedIcon from "@mui/icons-material/CableRounded";
@@ -41,8 +42,43 @@ const TenantAccess = () => {
   const [isError, setIsError] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(hasStoredTenantSession);
+  const [queueCount, setQueueCount] = useState(0);
+  const [queueCountLoading, setQueueCountLoading] = useState(false);
 
   const navigate = useNavigate();
+
+  const loadQueueCount = async () => {
+    const token = localStorage.getItem("token");
+    const baseUrl = localStorage.getItem("baseUrl");
+
+    if (!token || !baseUrl) {
+      return;
+    }
+
+    setQueueCountLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/jms-queues`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, baseUrl })
+      });
+      const data = await response.json();
+      
+      if (response.ok && data.queues) {
+        setQueueCount(data.queues.length);
+      }
+    } catch (error) {
+      console.error("Failed to load queue count:", error);
+    } finally {
+      setQueueCountLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isConnected) {
+      loadQueueCount();
+    }
+  }, [isConnected]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -94,7 +130,7 @@ const TenantAccess = () => {
     <Box
       sx={{
         minHeight: "100vh",
-        background: "#f6f8fb",
+        background: isConnected ? "linear-gradient(135deg, #1e3a5f 0%, #2d5a8c 100%)" : "#f6f8fb",
         display: "flex",
         flexDirection: "column"
       }}
@@ -143,15 +179,15 @@ const TenantAccess = () => {
               width: "100%",
               p: { xs: 3, md: 4 },
               borderRadius: 3,
-              background: "#f8fafc",
-              border: "1px solid #d7dee8",
-              boxShadow: "0 24px 60px rgba(15, 23, 42, 0.08)"
+              background: "transparent",
+              border: "none",
+              boxShadow: "none"
             }}
           >
             <Stack spacing={3} sx={{ width: "100%" }}>
               <Stack spacing={1} alignItems="center">
-                <Typography variant="h4" fontWeight="bold">
-                  Tenant Connected
+                <Typography variant="h4" fontWeight="bold" sx={{ color: "#ffffff" }}>
+                  Monitoring Status Overview
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
                 </Typography>
@@ -163,52 +199,107 @@ const TenantAccess = () => {
                 justifyContent="center"
                 alignItems="center"
               >
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={() => navigate("/status")}
+                <Paper
+                  elevation={0}
                   sx={{
-                    minHeight: { xs: 118, sm: 156 },
                     width: "100%",
                     maxWidth: { xs: "100%", sm: 260 },
-                    justifyContent: "center",
-                    alignItems: "center",
-                    px: 2.5,
-                    py: 2,
-                    borderRadius: 3,
-                    background: "#0b84d6",
-                    fontSize: 17,
-                    fontWeight: 800,
-                    textAlign: "center",
-                    lineHeight: 1.3,
-                    boxShadow: "0 14px 28px rgba(11, 132, 214, 0.18)"
+                    minHeight: { xs: 140, sm: 180 },
+                    borderRadius: 4,
+                    background: "#ffffff",
+                    border: "1px solid #e0e0e0",
+                    boxShadow: "0 8px 24px rgba(0, 0, 0, 0.12)",
+                    p: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "flex-start"
                   }}
                 >
-                  Message Monitoring Overview
-                </Button>
-                <Button
-                  variant="contained"
-                  size="small"
-                  onClick={() => navigate("/jms-queues")}
+                  <Button
+                    fullWidth
+                    onClick={() => navigate("/status")}
+                    sx={{
+                      height: "100%",
+                      justifyContent: "flex-start",
+                      alignItems: "flex-start",
+                      px: 3,
+                      py: 3,
+                      textTransform: "none",
+                      color: "#1f2937",
+                      fontSize: 15,
+                      fontWeight: 600,
+                      textAlign: "left",
+                      lineHeight: 1.4,
+                      "&:hover": {
+                        background: "rgba(11, 132, 214, 0.04)"
+                      },
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-start",
+                      justifyContent: "flex-start"
+                    }}
+                  >
+                    <Typography variant="body2" sx={{ color: "#64748b", fontSize: 14, fontWeight: 500, mb: 2 }}>
+                      Message Monitoring
+                    </Typography>
+                    <Typography sx={{ fontSize: 14, color: "#64748b" }}>
+                      Overview
+                    </Typography>
+                  </Button>
+                </Paper>
+                <Paper
+                  elevation={0}
                   sx={{
-                    minHeight: { xs: 118, sm: 156 },
                     width: "100%",
                     maxWidth: { xs: "100%", sm: 260 },
+                    minHeight: { xs: 140, sm: 180 },
+                    borderRadius: 4,
+                    background: "#ffffff",
+                    border: "1px solid #e0e0e0",
+                    boxShadow: "0 8px 24px rgba(0, 0, 0, 0.12)",
+                    p: 0,
+                    display: "flex",
+                    flexDirection: "column",
                     justifyContent: "center",
-                    alignItems: "center",
-                    px: 2.5,
-                    py: 2,
-                    borderRadius: 3,
-                    background: "#0b84d6",
-                    fontSize: 17,
-                    fontWeight: 800,
-                    textAlign: "center",
-                    lineHeight: 1.3,
-                    boxShadow: "0 14px 28px rgba(11, 132, 214, 0.18)"
+                    alignItems: "center"
                   }}
                 >
-                  JMS Queues
-                </Button>
+                  <Button
+                    fullWidth
+                    onClick={() => navigate("/jms-queues")}
+                    sx={{
+                      height: "100%",
+                      justifyContent: "center",
+                      alignItems: "center",
+                      px: 3,
+                      py: 3,
+                      textTransform: "none",
+                      color: "#0b63ce",
+                      textAlign: "center",
+                      lineHeight: 1.2,
+                      "&:hover": {
+                        background: "rgba(11, 132, 214, 0.04)"
+                      },
+                      display: "flex",
+                      flexDirection: "column",
+                      justifyContent: "center",
+                      alignItems: "center"
+                    }}
+                  >
+                    {queueCountLoading ? (
+                      <CircularProgress size={56} sx={{ color: "#0b63ce", mb: 2 }} />
+                    ) : (
+                      <>
+                        <Typography sx={{ fontSize: { xs: 48, md: 56 }, fontWeight: 600, color: "#6f89a5", lineHeight: 1 }}>
+                          {queueCount}
+                        </Typography>
+                        <Typography variant="body1" sx={{ color: "#64748b", fontWeight: 500, mt: 2 }}>
+                          Queues
+                        </Typography>
+                      </>
+                    )}
+                  </Button>
+                </Paper>
               </Stack>
             </Stack>
           </Paper>
