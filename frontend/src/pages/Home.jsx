@@ -21,9 +21,12 @@ function Home() {
             alt="Icon"
             className="landing-logo"
           /> */}
-          <h5 className="landing-title">
-            Welcome to Integration suite
-          </h5>
+          <h2 className="landing-title">
+            Welcome to
+          </h2>
+          <h2 className="landing-title">
+            Integration suite
+          </h2>
           <h2 className="landing-title">
             Monitoring Overview
           </h2>
