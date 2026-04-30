@@ -1663,7 +1663,48 @@ const retryJmsMessageDirect = async (baseUrl, token, sourceQueueName, jmsMessage
 
   throw lastError || new Error("Failed to retry JMS message directly.");
 };
+const retryJmsMessageSimple = async (baseUrl, token, queueName, jmsMessageId, failed) => {
+  const candidates = buildBaseUrlCandidates(baseUrl);
 
+  for (const candidate of candidates) {
+    try {
+
+      const csrfRes = await axios.get(`${candidate}/api/v1/`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "x-csrf-token": "fetch"
+        }
+      });
+
+      const csrfToken = csrfRes.headers["x-csrf-token"];
+      const cookie = extractCookieHeader(csrfRes.headers["set-cookie"]);
+
+      if (!csrfToken) throw new Error("No CSRF token");
+
+      const url = `${candidate}/api/v1/JmsMessages(Msgid='${encodeODataKey(jmsMessageId)}',Name='${encodeODataKey(queueName)}',Failed=${failed ? "true" : "false"})`;
+
+      await axios.patch(
+        url,
+        {}, // empty body
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "x-csrf-token": csrfToken,
+            ...(cookie ? { Cookie: cookie } : {}),
+            "Content-Type": "application/json",
+            Accept: "application/json"
+          }
+        }
+      );
+      return;
+
+    } catch (err) {
+      console.warn("Retry simple failed:", err.response?.data || err.message);
+    }
+  }
+
+  throw new Error("Retry failed for all candidates");
+};
 const retryJmsMessage = async (baseUrl, token, sourceQueueName, jmsMessageId, failed) => {
   try {
     await retryJmsMessageDirect(baseUrl, token, sourceQueueName, jmsMessageId, failed);
@@ -2018,17 +2059,17 @@ app.post("/jms-messages/retry", async (req, res) => {
   }
 
   try {
-    await Promise.all(
-      messages.map((message) =>
-        retryJmsMessage(
-          baseUrl,
-          token,
-          sourceQueueName,
-          message.jmsMessageId,
-          Boolean(message.failed)
-        )
-      )
-    );
+await Promise.all(
+  messages.map((message) =>
+    retryJmsMessageSimple(
+      baseUrl,
+      token,
+      sourceQueueName,
+      message.jmsMessageId,
+      Boolean(message.failed)
+    )
+  )
+);
 
     return res.json({ message: "Messages retried successfully." });
   } catch (error) {
