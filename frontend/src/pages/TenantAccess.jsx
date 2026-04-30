@@ -133,7 +133,7 @@ const TenantAccess = () => {
     <Box
       sx={{
         minHeight: "100vh",
-        background: "linear-gradient(120deg, #ecfeff, #f0fdf4)",
+        background: "linear-gradient(120deg, #ffffff, #ffffff)",
         display: "flex",
         flexDirection: "column"
       }}
@@ -172,7 +172,7 @@ const TenantAccess = () => {
     maxWidth: 720,
     p: 4,
     borderRadius: 3,
-    background: "rgba(255,255,255,0.65)",
+    background: "rgb(98, 151, 219)",
     backdropFilter: "blur(12px)",
     boxShadow: "0 25px 60px rgba(0,0,0,0.08)"
   }}
@@ -184,7 +184,7 @@ const TenantAccess = () => {
         fontSize: 32,
         fontWeight: 700,
         letterSpacing: "0.5px",
-        color: "#1e293b",
+        color: "#ffffff",
         fontFamily: "Inter, sans-serif"
       }}
     >
@@ -192,8 +192,9 @@ const TenantAccess = () => {
     </Typography>
 
     <Stack direction="row" spacing={4}>
+     
       <Paper
-        onClick={() => navigate("/status")}
+        onClick={() => navigate("/jms-queues")}
         sx={{
           width: 270,
           height: 210,
@@ -202,14 +203,12 @@ const TenantAccess = () => {
           border: "1px solid rgba(0,0,0,0.06)",
           p: 3,
           cursor: "pointer",
+          position: "relative",
           transition: "all 0.3s ease",
           boxShadow: "0 8px 20px rgba(0,0,0,0.06)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          textAlign: "center",  
+
           "&:hover": {
-            background: "#e2e8eccc",
+            background: "#e9e9e9",
             transform: "translateY(-2px)",
             boxShadow: "0 20px 40px rgba(0,0,0,0.12)"
           }
@@ -218,40 +217,6 @@ const TenantAccess = () => {
         <Typography
           sx={{
             fontSize: 24,
-            fontWeight: 500,
-            lineHeight: 1.3,
-            color: "#0f172a"
-          }}
-        >
-          Message <br />
-          Monitoring <br />
-          Overview
-        </Typography>
-      </Paper>
-      <Paper
-        onClick={() => navigate("/jms-queues")}
-        sx={{
-          width: 270,
-          height: 210,
-          borderRadius: 4,
-          background: "#ffffff",
-          border: "1px solid rgba(0,0,0,0.06)", // thin border
-          p: 3,
-          cursor: "pointer",
-          position: "relative",
-          transition: "all 0.3s ease",
-          boxShadow: "0 8px 20px rgba(0,0,0,0.06)",
-
-          "&:hover": {
-            background: "#e2e8eccc",
-            transform: "translateY(-2px)",
-            boxShadow: "0 20px 40px rgba(0,0,0,0.12)"
-          }
-        }}
-      >
-        <Typography
-          sx={{
-            fontSize: 20,
             fontWeight: 600,
             color: "#1e293b"
           }}
@@ -291,7 +256,42 @@ const TenantAccess = () => {
           </>
         )}
       </Paper>
-
+ <Paper
+        onClick={() => navigate("/status")}
+        sx={{
+          width: 270,
+          height: 210,
+          borderRadius: 4,
+          background: "#ffffff",
+          border: "1px solid rgba(0,0,0,0.06)",
+          p: 3,
+          cursor: "pointer",
+          transition: "all 0.3s ease",
+          boxShadow: "0 8px 20px rgba(0,0,0,0.06)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",  
+          "&:hover": {
+            background: "#e9e9e9",
+            transform: "translateY(-2px)",
+            boxShadow: "0 20px 40px rgba(0,0,0,0.12)"
+          }
+        }}
+      >
+        <Typography
+          sx={{
+            fontSize: 24,
+            fontWeight: 500,
+            lineHeight: 1.3,
+            color: "#0f172a"
+          }}
+        >
+          Message <br />
+          Monitoring <br />
+          Overview
+        </Typography>
+      </Paper>
     </Stack>
   </Stack>
 </Paper>
